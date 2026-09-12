@@ -1,4 +1,4 @@
-const CACHE='masil-v9-offline-media-20260912-1';
+const CACHE='masil-v12-realtime-ledger-20260912-1';
 const CORE=['./','./index.html','./admin.html','./manifest.webmanifest','./app-icon-192.png','./app-icon-512.png','./brand-logo.png'];
 const DB='masil_local_big_v1',VER=1;
 function mediaFromIdb(id){return new Promise(resolve=>{try{const r=indexedDB.open(DB,VER);r.onsuccess=()=>{const db=r.result;try{const tx=db.transaction('media','readonly'),g=tx.objectStore('media').get(id);g.onsuccess=()=>{const row=g.result;db.close();if(!row?.blob)return resolve(null);resolve(new Response(row.blob,{status:200,headers:{'Content-Type':row.type||row.blob.type||'image/webp','Cache-Control':'private, max-age=31536000'}}))};g.onerror=()=>{db.close();resolve(null)}}catch{db.close();resolve(null)}};r.onerror=()=>resolve(null)}catch{resolve(null)}})}

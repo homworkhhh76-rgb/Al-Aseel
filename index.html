@@ -4110,7 +4110,7 @@
 (()=>{
 'use strict';
 const enc=new TextEncoder(),dec=new TextDecoder();
-const R={APP:'MASIL_WEB_V3',SESSION:'masil_session_v3',HINT:'masil_session_hint_v3',MASTER:'masil_master_v3',ADMIN:'masil_admin_lock_v3',DEVICE:'masil_device_v3',VERIFY:'masil_verified_v3',QUEUE:'masil_sync_queue_v3',LASTSYNC:'masil_last_sync_v3',ROOT:'masil'};
+const R={APP:'MASIL_WEB_V3',SESSION:'masil_session_v3',HINT:'masil_session_hint_v3',MASTER:'masil_master_v3',ADMIN:'masil_admin_lock_v3',DEVICE:'masil_device_v3',VERIFY:'masil_verified_v3',QUEUE:'masil_sync_queue_v3',LASTSYNC:'masil_last_sync_v3',PENDING:'masil_pending_count_v3',REV:'masil_remote_revision_v3',ROOT:'masil'};
 const APP_KEYS=['ahm_settings','ahm_zones','ahm_panels','ahm_subscribers','ahm_meters','ahm_invoices','ahm_accounts','ahm_expense_types','ahm_transactions','ahm_employees','ahm_tasks','ahm_timeline','ahm_support','ahm_generators','ahm_timelogs'];
 const LOCAL_DB='masil_local_big_v1',LOCAL_VER=1,PAGE_SIZE=50;
 const SNAP_MAP={settings:'ahm_settings',zones:'ahm_zones',panels:'ahm_panels',subscribers:'ahm_subscribers',meters:'ahm_meters',invoices:'ahm_invoices',financialAccounts:'ahm_accounts',expenseTypes:'ahm_expense_types',transactions:'ahm_transactions',employees:'ahm_employees',tasks:'ahm_tasks',timeline:'ahm_timeline',supportMessages:'ahm_support',generators:'ahm_generators',timeLogs:'ahm_timelogs'};
@@ -4128,13 +4128,13 @@ function trimOldestLocalRecord(){let chosen=null;for(const k of APP_KEYS){if(k==
 function updateCurrentSnapshot(prop,value){const base=window.__MASIL_CURRENT_SNAPSHOT||window.__MASIL_FULL_CACHE_SNAPSHOT||{};base[prop]=clone(value);base.updatedAt=nowIso();window.__MASIL_CURRENT_SNAPSHOT=base;window.__MASIL_FULL_CACHE_SNAPSHOT=base;return base}
 async function persistLocal(prop,key,value){let normalized=value;const aliases=window.__MASIL_MEDIA_ALIASES||{};for(const [from,to] of Object.entries(aliases))normalized=replaceMediaRef(normalized,from,to);const existing=window.__MASIL_CURRENT_SNAPSHOT?.[prop];const bootSlice=!!window.__MASIL_BOOTING_FIRST_PAGE&&Array.isArray(normalized)&&Array.isArray(existing)&&existing.length>normalized.length&&normalized.length<=PAGE_SIZE;const full=bootSlice?(window.__MASIL_CURRENT_SNAPSHOT||{}):updateCurrentSnapshot(prop,normalized);try{const localValue=Array.isArray(normalized)?normalized.slice(0,PAGE_SIZE):normalized;localStorage.setItem(key,JSON.stringify(localValue))}catch(e){try{trimOldestLocalRecord();localStorage.setItem(key,JSON.stringify(Array.isArray(normalized)?normalized.slice(0,20):normalized))}catch{}}
  const sess=readSessionFast();if(sess?.companyId&&!bootSlice){idbSafePut('kv',{key:`snapshot:${sess.companyId}`,value:clone(full),updatedAt:Date.now()}).catch(()=>{});}return true}
-async function hydrateCollections(names){const sess=readSessionFast();const full=await getCachedFullSnapshot(sess?.companyId);if(!full)return null;const out={};for(const n of names||[])if(full[n]!==undefined)out[n]=clone(full[n]);return out}
+async function hydrateCollections(names){const sess=readSessionFast();const full=await getCachedFullSnapshot(sess?.companyId);if(!full)return null;window.__MASIL_HYDRATED_COLLECTIONS=window.__MASIL_HYDRATED_COLLECTIONS||new Set();const out={};for(const n of names||[]){if(full[n]!==undefined){out[n]=clone(full[n]);window.__MASIL_HYDRATED_COLLECTIONS.add(n)}}return out}
 async function compressImage(file,maxBytes=50*1024){if(!file||!String(file.type||'').startsWith('image/'))throw new Error('اختر ملف صورة صالح.');let bmp;try{bmp=await createImageBitmap(file)}catch{const img=new Image();const url=URL.createObjectURL(file);await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});bmp=img;setTimeout(()=>URL.revokeObjectURL(url),0)}let w=bmp.width||bmp.naturalWidth,h=bmp.height||bmp.naturalHeight;const maxDim=1600;if(Math.max(w,h)>maxDim){const r=maxDim/Math.max(w,h);w=Math.max(1,Math.round(w*r));h=Math.max(1,Math.round(h*r))}const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{alpha:false});let best=file;for(let scalePass=0;scalePass<5;scalePass++){canvas.width=w;canvas.height=h;ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);ctx.drawImage(bmp,0,0,w,h);for(let q=.82;q>=.34;q-=.08){const blob=await new Promise(res=>canvas.toBlob(res,'image/webp',q));if(blob){best=blob;if(blob.size<=maxBytes)return blob}}w=Math.max(240,Math.round(w*.78));h=Math.max(240,Math.round(h*.78));}return best}
 async function blobToDataURL(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)})}
-async function storeMediaFile(file){const blob=await compressImage(file,50*1024),sess=readSessionFast()||{},settings=(window.__MASIL_CURRENT_SNAPSHOT?.settings)||localJSON('ahm_settings',{}),endpoint=safe(settings.mediaUploadEndpoint);if(navigator.onLine!==false&&endpoint){try{const fd=new FormData();fd.append('file',blob,`media-${Date.now()}.webp`);fd.append('companyId',safe(sess.companyId)||'company');const response=await fetch(endpoint.replace(/\/+$/,'')+'/upload',{method:'POST',body:fd});const data=await response.json().catch(()=>({}));if(response.ok&&data.url)return data.url}catch(e){console.warn('media remote upload queued locally',e)}}const id=`m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,9)}`;try{await idbSafePut('media',{id,blob,type:blob.type||'image/webp',updatedAt:Date.now(),companyId:sess.companyId||'',pending:true});return `./__media/${id}`}catch{return await blobToDataURL(blob)}}
-async function uploadMediaBlob(blob,id){const settings=(window.__MASIL_CURRENT_SNAPSHOT?.settings)||localJSON('ahm_settings',{}),endpoint=safe(settings.mediaUploadEndpoint);if(!endpoint||navigator.onLine===false)return null;const sess=readSessionFast()||{},fd=new FormData();fd.append('file',blob,`${id||'media'}.webp`);fd.append('companyId',safe(sess.companyId)||'company');const response=await fetch(endpoint.replace(/\/+$/,'')+'/upload',{method:'POST',body:fd});const data=await response.json().catch(()=>({}));if(!response.ok||!data.url)throw new Error(data.error||'تعذر رفع الصورة');return data.url}
+async function storeMediaFile(file){const blob=await compressImage(file,50*1024),sess=readSessionFast()||{},settings=(window.__MASIL_CURRENT_SNAPSHOT?.settings)||localJSON('ahm_settings',{}),endpoint=mediaGateway();if(navigator.onLine!==false&&endpoint){try{const fd=new FormData();fd.append('file',blob,`media-${Date.now()}.webp`);fd.append('companyId',safe(sess.companyId)||'company');const response=await fetch(endpoint.replace(/\/+$/,'')+'/upload',{method:'POST',body:fd});const data=await response.json().catch(()=>({}));if(response.ok&&data.url)return data.url}catch(e){console.warn('media remote upload queued locally',e)}}const id=`m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,9)}`;try{await idbSafePut('media',{id,blob,type:blob.type||'image/webp',updatedAt:Date.now(),companyId:sess.companyId||'',pending:true});return `./__media/${id}`}catch{return await blobToDataURL(blob)}}
+async function uploadMediaBlob(blob,id){const settings=(window.__MASIL_CURRENT_SNAPSHOT?.settings)||localJSON('ahm_settings',{}),endpoint=mediaGateway();if(!endpoint||navigator.onLine===false)return null;const sess=readSessionFast()||{},fd=new FormData();fd.append('file',blob,`${id||'media'}.webp`);fd.append('companyId',safe(sess.companyId)||'company');const response=await fetch(endpoint.replace(/\/+$/,'')+'/upload',{method:'POST',body:fd});const data=await response.json().catch(()=>({}));if(!response.ok||!data.url)throw new Error(data.error||'تعذر رفع الصورة');return data.url}
 function replaceMediaRef(value,from,to){if(value===from)return to;if(Array.isArray(value))return value.map(v=>replaceMediaRef(v,from,to));if(value&&typeof value==='object'){const o={};for(const [k,v] of Object.entries(value))o[k]=replaceMediaRef(v,from,to);return o}return value}
-async function syncPendingMedia(){if(navigator.onLine===false)return 0;const settings=(window.__MASIL_CURRENT_SNAPSHOT?.settings)||localJSON('ahm_settings',{});if(!safe(settings.mediaUploadEndpoint))return 0;let db;try{db=await idbOpen()}catch{return 0}const pending=await new Promise((resolve,reject)=>{const out=[],tx=db.transaction('media','readonly'),r=tx.objectStore('media').openCursor();r.onsuccess=e=>{const c=e.target.result;if(c){if(c.value?.pending&&c.value?.blob)out.push(c.value);c.continue()}else resolve(out)};r.onerror=()=>reject(r.error)}).catch(()=>[]);db.close();let n=0,changed=false;for(const row of pending){try{const url=await uploadMediaBlob(row.blob,row.id),from=`./__media/${row.id}`;if(url){window.__MASIL_MEDIA_ALIASES=window.__MASIL_MEDIA_ALIASES||{};window.__MASIL_MEDIA_ALIASES[from]=url;window.__MASIL_CURRENT_SNAPSHOT=replaceMediaRef(window.__MASIL_CURRENT_SNAPSHOT||{},from,url);window.__MASIL_FULL_CACHE_SNAPSHOT=window.__MASIL_CURRENT_SNAPSHOT;await idbSafePut('media',{...row,pending:false,remoteUrl:url,updatedAt:Date.now()});n++;changed=true}}catch{}}if(changed){const sess=readSessionFast();if(sess?.companyId)await cacheFullSnapshot(sess.companyId,window.__MASIL_CURRENT_SNAPSHOT);await stageSnapshot(window.__MASIL_CURRENT_SNAPSHOT)}return n}
+async function syncPendingMedia(){if(navigator.onLine===false)return 0;const settings=(window.__MASIL_CURRENT_SNAPSHOT?.settings)||localJSON('ahm_settings',{});if(!mediaGateway())return 0;let db;try{db=await idbOpen()}catch{return 0}const pending=await new Promise((resolve,reject)=>{const out=[],tx=db.transaction('media','readonly'),r=tx.objectStore('media').openCursor();r.onsuccess=e=>{const c=e.target.result;if(c){if(c.value?.pending&&c.value?.blob)out.push(c.value);c.continue()}else resolve(out)};r.onerror=()=>reject(r.error)}).catch(()=>[]);db.close();let n=0,changed=false;for(const row of pending){try{const url=await uploadMediaBlob(row.blob,row.id),from=`./__media/${row.id}`;if(url){window.__MASIL_MEDIA_ALIASES=window.__MASIL_MEDIA_ALIASES||{};window.__MASIL_MEDIA_ALIASES[from]=url;window.__MASIL_CURRENT_SNAPSHOT=replaceMediaRef(window.__MASIL_CURRENT_SNAPSHOT||{},from,url);window.__MASIL_FULL_CACHE_SNAPSHOT=window.__MASIL_CURRENT_SNAPSHOT;await idbSafePut('media',{...row,pending:false,remoteUrl:url,updatedAt:Date.now()});n++;changed=true}}catch{}}if(changed){const sess=readSessionFast();if(sess?.companyId)await cacheFullSnapshot(sess.companyId,window.__MASIL_CURRENT_SNAPSHOT);await stageSnapshot(window.__MASIL_CURRENT_SNAPSHOT)}return n}
 async function removeMedia(ref){const m=String(ref||'').match(/\/__media\/([^?#]+)/);if(m)await idbDel('media',m[1]);return true}
 window.MoldMedia={storeFile:storeMediaFile,remove:removeMedia,compressImage,syncPending:syncPendingMedia,get:async(ref)=>{const m=String(ref||'').match(/\/__media\/([^?#]+)/);return m?await idbGet('media',m[1]):null}};
 window.MoldPWA=window.MoldPWA||{deferred:null,installed:window.matchMedia?.('(display-mode: standalone)')?.matches||false};
@@ -4142,6 +4142,7 @@ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();window.Mold
 window.addEventListener('appinstalled',()=>{window.MoldPWA.deferred=null;window.MoldPWA.installed=true;window.asilToast?.('تم تثبيت التطبيق بنجاح.','success')});
 window.MoldPWA.install=async()=>{if(window.MoldPWA.installed){window.asilToast?.('التطبيق مثبت على هذا الجهاز.','success');return true}const e=window.MoldPWA.deferred;if(e){await e.prompt();const c=await e.userChoice;window.MoldPWA.deferred=null;return c?.outcome==='accepted'}window.asilToast?.('افتح الموقع من Chrome عبر HTTPS ثم استخدم «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية».','info');return false};
 const safe=v=>String(v??'').trim(); const clone=v=>JSON.parse(JSON.stringify(v)); const nowIso=()=>new Date().toISOString();
+const mediaGateway=()=>{const forced=safe(globalThis.__MOLD_MEDIA_GATEWAY||'');if(forced)return forced.replace(/\/+$/,'');try{if(location.protocol==='http:'||location.protocol==='https:')return `${location.origin}/media-api`}catch{}return''};
 const b64=u8=>btoa(String.fromCharCode(...u8)); const unb64=s=>Uint8Array.from(atob(String(s||'')),c=>c.charCodeAt(0));
 const uid=(p='ID')=>`${p}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
 async function derive(pass,salt,it=220000){const m=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:it,hash:'SHA-256'},m,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);}
@@ -4163,7 +4164,7 @@ async function write(db,path,value,deleted=false){await ensure(db);const t=table
 async function read(db,path,{ensureSchema=false}={}){if(ensureSchema)await ensure(db);const t=table(db);const [r]=await pipeline(db,[{sql:`SELECT payload,deleted,updated_at FROM ${t} WHERE path=? LIMIT 1`,args:[path]}]);const x=rows(r)[0];if(!x)return undefined;if(Number(x.deleted)===1)return null;try{return JSON.parse(x.payload)}catch{return x.payload}}
 async function list(db,prefix,{ensureSchema=false}={}){if(ensureSchema)await ensure(db);const t=table(db),hi=prefix+'\uffff';const[r]=await pipeline(db,[{sql:`SELECT path,payload,deleted,updated_at FROM ${t} WHERE path>=? AND path<? ORDER BY path`,args:[prefix,hi]}],60000);return rows(r).filter(x=>Number(x.deleted)!==1).map(x=>{let p=x.payload;try{p=JSON.parse(p)}catch{}return{...x,payload:p}})}
 function clearAppData(){for(const k of APP_KEYS)localStorage.removeItem(k)}
-function importSnapshot(snapshot,meta={},opts={}){clearAppData();const s=snapshot&&typeof snapshot==='object'?snapshot:{};for(const [p,k] of Object.entries(SNAP_MAP)){if(s[p]!==undefined){const v=Array.isArray(s[p])?s[p].slice(0,PAGE_SIZE):s[p];try{localStorage.setItem(k,JSON.stringify(v))}catch{}}}if(!s.settings){localStorage.setItem('ahm_settings',JSON.stringify({networkName:meta.companyName||'المولد الأصيل',networkSubtitle:'إدارة اشتراكات الكهرباء بسهولة',managerName:meta.managerName||'مدير النظام',printerType:'thermal80',defaultPricePerKw:0,defaultDiscount:0,currency:'₪',theme:'light',scheduleDark:false,darkScheduleStart:'20:00',darkScheduleEnd:'06:00',language:'ar',supportMessagingEnabled:true,notificationsEnabled:true,notificationSchedule:'daily',showInvoiceBarcode:true,showInvoiceLogo:true,showInvoiceName:true,showInvoiceSubtitle:true,showInvoiceNumberDate:true,showInvoiceSubscriber:true,showInvoiceReadings:true,showInvoiceTotals:true,showInvoiceMedia:true,showInvoiceFooter:true,messageTemplates:{}}))}if(!opts.keepCache){window.__MASIL_BOOT_SNAPSHOT=firstPageSnapshot(s)}}
+function importSnapshot(snapshot,meta={},opts={}){clearAppData();const s=snapshot&&typeof snapshot==='object'?snapshot:{};for(const [p,k] of Object.entries(SNAP_MAP)){if(s[p]!==undefined){const v=Array.isArray(s[p])?s[p].slice(0,PAGE_SIZE):s[p];try{localStorage.setItem(k,JSON.stringify(v))}catch{}}}if(!s.settings){localStorage.setItem('ahm_settings',JSON.stringify({networkName:meta.companyName||'المولد الأصيل',networkSubtitle:'إدارة اشتراكات الكهرباء بسهولة',managerName:meta.managerName||'مدير النظام',printerType:'thermal80',defaultPricePerKw:0,defaultDiscount:0,currency:'شيكل',theme:'light',scheduleDark:false,darkScheduleStart:'20:00',darkScheduleEnd:'06:00',language:'ar',supportMessagingEnabled:true,notificationsEnabled:true,notificationSchedule:'daily',showInvoiceBarcode:true,showInvoiceLogo:true,showInvoiceName:true,showInvoiceSubtitle:true,showInvoiceNumberDate:true,showInvoiceSubscriber:true,showInvoiceReadings:true,showInvoiceTotals:true,showInvoiceMedia:true,showInvoiceFooter:true,messageTemplates:{}}))}if(!opts.keepCache){window.__MASIL_BOOT_SNAPSHOT=firstPageSnapshot(s)}}
 async function makeLoginFile(payload,password){if(!safe(password)||password.length<4)throw new Error('كلمة المرور يجب أن تكون 4 أحرف على الأقل.');const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),key=await derive(password+'|MASIL-FILE',salt,240000);const body={...clone(payload),app:R.APP,fileId:payload.fileId||uid('FILE')};const c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(JSON.stringify(body))));const raw=new Uint8Array(1+16+12+c.length);raw[0]=0x73;raw.set(salt,1);raw.set(iv,17);raw.set(c,29);return{payload:body,text:b64(raw)}}
 async function openLoginText(text,password){let raw;try{raw=unb64(String(text||'').replace(/\s+/g,''))}catch{throw new Error('ملف الدخول غير صالح.')}if(raw.length<60||raw[0]!==0x73)throw new Error('ملف الدخول غير صالح.');try{const key=await derive(password+'|MASIL-FILE',raw.slice(1,17),240000);const p=await crypto.subtle.decrypt({name:'AES-GCM',iv:raw.slice(17,29)},key,raw.slice(29));const obj=JSON.parse(dec.decode(p));if(obj?.app!==R.APP)throw new Error();return obj}catch{throw new Error('كلمة المرور أو ملف الدخول غير صحيح.') }}
 function downloadBlob(text,name){const blob=new Blob([text],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=(name||'login.asil').replace(/[\\/:*?"<>|]+/g,'_');document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000)}
@@ -4174,22 +4175,33 @@ function cachedOkay(payload){const v=verificationMap()[payload.fileId];return !!
 function companyPath(id){return `${R.ROOT}/companies/${encodeURIComponent(id)}`}
 async function verifyPayload(payload){if(payload?.app!==R.APP)throw new Error('ملف الدخول غير صالح.');if(payload.expiresAt&&Date.now()>=new Date(payload.expiresAt).getTime())throw new Error('انتهت صلاحية ملف الدخول.');const db=payload.database||{};const access=await read(db,`${companyPath(payload.companyId)}/access/company`,{ensureSchema:true});if(!access)throw new Error('الشركة غير مسجلة في قاعدة البيانات.');if(access.status!=='active')throw new Error('حساب الشركة موقوف.');if(access.endAt&&Date.now()>=new Date(access.endAt).getTime())throw new Error('انتهت مدة اشتراك الشركة.');if(String(access.companyKey||'')!==String(payload.companyKey||''))throw new Error('ملف الدخول لا يطابق الشركة.');let account;if(payload.account?.roleType==='manager')account=access.manager;else account=await read(db,`${companyPath(payload.companyId)}/access/accounts/${encodeURIComponent(payload.account?.id||'')}`);if(!account||account.active===false||account.isFrozen===true)throw new Error('الحساب غير فعال.');if(String(account.authVersion||'')!==String(payload.account?.authVersion||''))throw new Error('هذا الملف قديم. نزّل ملف الدخول الحديث.');return{access,account}}
 async function loginWithFile(file,password){if(!file)throw new Error('اختر ملف الدخول أولاً.');const text=await file.text(),payload=await openLoginText(text,password);let verified=null;if(navigator.onLine!==false){verified=await verifyPayload(payload);markVerified(payload,verified.access)}else if(!cachedOkay(payload)){throw new Error('يلزم الاتصال بالإنترنت للتحقق من الملف لأول مرة أو بعد تحديثه.')}const access=verified?.access||{companyName:payload.companyName,endAt:payload.expiresAt,maxUsers:payload.maxUsers,status:'active'};const account=verified?.account||payload.account;let snap=null;if(navigator.onLine!==false){try{snap=await read(payload.database,`${companyPath(payload.companyId)}/data/snapshot`,{ensureSchema:true})}catch{}}if(!snap) snap=await getCachedFullSnapshot(payload.companyId);if(snap){await cacheFullSnapshot(payload.companyId,snap);importSnapshot(firstPageSnapshot(snap),{companyName:access.companyName||payload.companyName,managerName:account.name},{keepCache:true})}else importSnapshot(null,{companyName:access.companyName||payload.companyName,managerName:account.name});
-const session={companyId:payload.companyId,companyKey:payload.companyKey,companyName:access.companyName||payload.companyName,database:payload.database,expiresAt:access.endAt||payload.expiresAt||'',maxUsers:Number(access.maxUsers||payload.maxUsers||1),account:{...account,roleType:payload.account?.roleType||account.roleType||'employee'},fileId:payload.fileId,loggedAt:Date.now()};await deviceSave(R.SESSION,session);localStorage.setItem(R.HINT,JSON.stringify({companyId:session.companyId,companyName:session.companyName,expiresAt:session.expiresAt,maxUsers:session.maxUsers,account:session.account}));window.__MASIL_SESSION_CACHE=session;localStorage.setItem('ahm_logged_in','true');localStorage.setItem('ahm_role',session.account.roleType==='manager'?'admin':'employee');if(session.account.roleType==='employee')localStorage.setItem('ahm_active_employee',session.account.id);return session}
+const session={companyId:payload.companyId,companyKey:payload.companyKey,companyName:access.companyName||payload.companyName,database:payload.database,expiresAt:access.endAt||payload.expiresAt||'',maxUsers:Number(access.maxUsers||payload.maxUsers||1),account:{...account,roleType:payload.account?.roleType||account.roleType||'employee'},fileId:payload.fileId,loggedAt:Date.now()};await deviceSave(R.SESSION,session);localStorage.setItem(R.HINT,JSON.stringify({companyId:session.companyId,companyName:session.companyName,expiresAt:session.expiresAt,maxUsers:session.maxUsers,account:session.account}));window.__MASIL_SESSION_CACHE=session;localStorage.setItem('ahm_logged_in','true');localStorage.setItem('ahm_role',session.account.roleType==='manager'?'admin':'employee');if(session.account.roleType==='employee')localStorage.setItem('ahm_active_employee',session.account.id);startRealtimeSync();setTimeout(async()=>{try{if(queueRead())await flushQueue();await pullRemoteSnapshot(true)}catch{}},80);return session}
 async function readSession(){return deviceRead(R.SESSION)}
 function readSessionFast(){try{if(window.__MASIL_SESSION_CACHE)return window.__MASIL_SESSION_CACHE;const h=localStorage.getItem(R.HINT);return h?JSON.parse(h):null}catch{return null}}
-async function primeSession(){window.__MASIL_SESSION_CACHE=await readSession();if(window.__MASIL_SESSION_CACHE){localStorage.setItem('ahm_logged_in','true');if(!localStorage.getItem('ahm_role'))localStorage.setItem('ahm_role',window.__MASIL_SESSION_CACHE.account?.roleType==='manager'?'admin':'employee')}return window.__MASIL_SESSION_CACHE}
-async function logout(){localStorage.removeItem(R.SESSION);localStorage.removeItem(R.HINT);localStorage.removeItem('ahm_logged_in');localStorage.removeItem('ahm_role');localStorage.removeItem('ahm_active_employee');window.__MASIL_SESSION_CACHE=null}
+async function primeSession(){window.__MASIL_SESSION_CACHE=await readSession();if(window.__MASIL_SESSION_CACHE){localStorage.setItem('ahm_logged_in','true');if(!localStorage.getItem('ahm_role'))localStorage.setItem('ahm_role',window.__MASIL_SESSION_CACHE.account?.roleType==='manager'?'admin':'employee');startRealtimeSync();setTimeout(async()=>{try{if(queueRead())await flushQueue();await pullRemoteSnapshot(true)}catch{}},80)}return window.__MASIL_SESSION_CACHE}
+async function logout(){stopRealtimeSync();localStorage.removeItem(R.SESSION);localStorage.removeItem(R.HINT);localStorage.removeItem('ahm_logged_in');localStorage.removeItem('ahm_role');localStorage.removeItem('ahm_active_employee');window.__MASIL_SESSION_CACHE=null}
 function snapshotHash(str){let h=0;for(let i=0;i<str.length;i++)h=((h<<5)-h+str.charCodeAt(i))|0;return String(h)+'_'+str.length}
 function queueRead(){const raw=localStorage.getItem(R.QUEUE);if(!raw)return null;try{return JSON.parse(raw)}catch{return null}}
 function dispatchSyncState(){try{window.dispatchEvent(new CustomEvent('masil-sync-state',{detail:getSyncStatus()}))}catch{}}
 function localJSON(key,fallback){try{const v=localStorage.getItem(key);return v==null?fallback:JSON.parse(v)}catch{return fallback}}
 function buildLocalSnapshot(){if(window.__MASIL_CURRENT_SNAPSHOT)return clone({...window.__MASIL_CURRENT_SNAPSHOT,updatedAt:nowIso()});return{settings:localJSON('ahm_settings',{}),zones:localJSON('ahm_zones',[]),panels:localJSON('ahm_panels',[]),subscribers:localJSON('ahm_subscribers',[]),meters:localJSON('ahm_meters',[]),invoices:localJSON('ahm_invoices',[]),financialAccounts:localJSON('ahm_accounts',[]),expenseTypes:localJSON('ahm_expense_types',[]),transactions:localJSON('ahm_transactions',[]),employees:localJSON('ahm_employees',[]),tasks:localJSON('ahm_tasks',[]),timeline:localJSON('ahm_timeline',[]),supportMessages:localJSON('ahm_support',[]),generators:localJSON('ahm_generators',[]),timeLogs:localJSON('ahm_timelogs',[]),updatedAt:nowIso()}}
-function getSyncStatus(){const q=queueRead();return{online:navigator.onLine!==false,pendingCount:q?1:0,pendingAt:q?.updatedAt||null,lastSync:Number(localStorage.getItem(R.LASTSYNC)||0)||null}}
+function getSyncStatus(){const q=queueRead();const pendingStored=Math.max(0,Number(localStorage.getItem(R.PENDING)||0)||0);return{online:navigator.onLine!==false,pendingCount:q?Math.max(1,pendingStored):0,pendingAt:q?.updatedAt||null,lastSync:Number(localStorage.getItem(R.LASTSYNC)||0)||null,syncing:!!window.__MASIL_SYNCING}}
 async function sessionCached(){return window.__MASIL_SESSION_CACHE||await readSession()}
-async function stageSnapshot(snapshot){const s=await sessionCached();if(!s?.companyId||!s?.database)return false;let str;try{str=JSON.stringify(snapshot)}catch{return false}const full=clone(snapshot),hash=snapshotHash(str),key=`masil_hash_${s.companyId}`;window.__MASIL_CURRENT_SNAPSHOT=full;window.__MASIL_FULL_CACHE_SNAPSHOT=full;await idbSafePut('kv',{key:`snapshot:${s.companyId}`,value:full,updatedAt:Date.now()});if(localStorage.getItem(key)===hash){if(queueRead()?.hash===hash){localStorage.removeItem(R.QUEUE);await idbDel('kv',`queue:${s.companyId}`)}dispatchSyncState();return false}await idbSafePut('kv',{key:`queue:${s.companyId}`,value:full,updatedAt:Date.now()});localStorage.setItem(R.QUEUE,JSON.stringify({companyId:s.companyId,hash,updatedAt:Date.now()}));dispatchSyncState();return true}
-async function flushQueue(){const q=queueRead();if(!q||navigator.onLine===false){dispatchSyncState();return false}const s=await sessionCached();if(!s?.companyId||!s?.database)return false;if(q.companyId&&q.companyId!==s.companyId)return false;const row=await idbGet('kv',`queue:${s.companyId}`);const snapshot=row?.value||window.__MASIL_CURRENT_SNAPSHOT;if(!snapshot)return false;try{await write(s.database,`${companyPath(s.companyId)}/data/snapshot`,snapshot);const hash=q.hash||snapshotHash(JSON.stringify(snapshot));localStorage.setItem(`masil_hash_${s.companyId}`,hash);localStorage.setItem(R.LASTSYNC,String(Date.now()));const latest=queueRead();if(!latest||latest.hash===hash){localStorage.removeItem(R.QUEUE);await idbDel('kv',`queue:${s.companyId}`)}await cacheFullSnapshot(s.companyId,snapshot);dispatchSyncState();return true}catch(e){dispatchSyncState();throw e}}
+function mergeSnapshotForPush(snapshot){const base=window.__MASIL_CURRENT_SNAPSHOT||window.__MASIL_FULL_CACHE_SNAPSHOT||{};const hydrated=window.__MASIL_HYDRATED_COLLECTIONS||new Set();const out={...clone(base),...clone(snapshot||{})};for(const k of ['zones','panels','subscribers','meters','invoices','financialAccounts','expenseTypes','transactions','employees','tasks','timeline','supportMessages','generators','timeLogs']){if(Array.isArray(base[k])&&!hydrated.has(k)&&Array.isArray(snapshot?.[k]))out[k]=clone(base[k])}out.settings=clone(snapshot?.settings||base.settings||{});out.updatedAt=nowIso();return out}
+const syncDeviceId=()=>{let id=localStorage.getItem('masil_sync_device_id');if(!id){id=uid('DEV');localStorage.setItem('masil_sync_device_id',id)}return id};
+let __MASIL_FLUSH_BUSY=false;let __MASIL_REMOTE_SYNC_BUSY=false;let __MASIL_REMOTE_SYNC_TIMER=null;
+function setSyncing(v){window.__MASIL_SYNCING=!!v;dispatchSyncState()}
+async function stageSnapshot(snapshot){const s=await sessionCached();if(!s?.companyId||!s?.database||!snapshot)return false;let str;try{str=JSON.stringify(snapshot)}catch{return false}const full=mergeSnapshotForPush(snapshot);str=JSON.stringify(full);const hash=snapshotHash(str),key=`masil_hash_${s.companyId}`;window.__MASIL_CURRENT_SNAPSHOT=full;window.__MASIL_FULL_CACHE_SNAPSHOT=full;await idbSafePut('kv',{key:`snapshot:${s.companyId}`,value:full,updatedAt:Date.now()});const currentQueue=queueRead();if(localStorage.getItem(key)===hash&&!currentQueue){dispatchSyncState();return false}if(currentQueue?.hash===hash){dispatchSyncState();return false}await idbSafePut('kv',{key:`queue:${s.companyId}`,value:full,updatedAt:Date.now()});const pending=Math.max(0,Number(localStorage.getItem(R.PENDING)||0)||0)+1;localStorage.setItem(R.PENDING,String(pending));localStorage.setItem(R.QUEUE,JSON.stringify({companyId:s.companyId,hash,updatedAt:Date.now(),pendingCount:pending}));dispatchSyncState();return true}
+async function flushQueue(){if(__MASIL_FLUSH_BUSY)return false;const q=queueRead();if(!q||navigator.onLine===false){dispatchSyncState();return false}const s=await sessionCached();if(!s?.companyId||!s?.database)return false;if(q.companyId&&q.companyId!==s.companyId)return false;const row=await idbGet('kv',`queue:${s.companyId}`);const snapshot=row?.value||window.__MASIL_CURRENT_SNAPSHOT;if(!snapshot)return false;__MASIL_FLUSH_BUSY=true;setSyncing(true);try{const hash=q.hash||snapshotHash(JSON.stringify(snapshot));const revision=Date.now();await write(s.database,`${companyPath(s.companyId)}/data/snapshot`,snapshot);await write(s.database,`${companyPath(s.companyId)}/data/meta`,{hash,revision,updatedAt:revision,deviceId:syncDeviceId()});localStorage.setItem(`masil_hash_${s.companyId}`,hash);localStorage.setItem(R.REV,String(revision));localStorage.setItem(R.LASTSYNC,String(revision));const latest=queueRead();if(!latest||latest.hash===hash){localStorage.removeItem(R.QUEUE);localStorage.setItem(R.PENDING,'0');await idbDel('kv',`queue:${s.companyId}`)}await cacheFullSnapshot(s.companyId,snapshot);return true}catch(e){throw e}finally{__MASIL_FLUSH_BUSY=false;setSyncing(false);dispatchSyncState()}}
 async function saveSnapshot(snapshot){await stageSnapshot(snapshot);if(navigator.onLine===false)return false;return flushQueue()}
-async function forceSync(){await stageSnapshot(buildLocalSnapshot());return flushQueue()}
+async function forceSync(){if(navigator.onLine===false){dispatchSyncState();return false}if(!queueRead())await stageSnapshot(window.__MASIL_CURRENT_SNAPSHOT||buildLocalSnapshot());if(queueRead())await flushQueue();return pullRemoteSnapshot(true)}
+async function applyRemoteSnapshot(snapshot,source='remote'){const sess=await sessionCached();const meta={companyName:sess?.companyName||'المولد الأصيل',managerName:sess?.account?.name||'مدير النظام'};window.__MASIL_SUPPRESS_PUSH_UNTIL=Date.now()+1800;window.__MASIL_HYDRATED_COLLECTIONS=new Set(['zones','panels','subscribers','meters','invoices','financialAccounts','expenseTypes','transactions','employees','tasks','timeline','supportMessages','generators','timeLogs']);window.__MASIL_CURRENT_SNAPSHOT=clone(snapshot||{});window.__MASIL_FULL_CACHE_SNAPSHOT=clone(snapshot||{});if(sess?.companyId)await cacheFullSnapshot(sess.companyId,snapshot||{});importSnapshot(firstPageSnapshot(snapshot||{}),meta,{keepCache:true});try{window.dispatchEvent(new CustomEvent('masil-remote-snapshot',{detail:{snapshot:clone(snapshot||{}),source}}))}catch{}dispatchSyncState();return true}
+async function pullRemoteSnapshot(force=false){if(__MASIL_REMOTE_SYNC_BUSY||__MASIL_FLUSH_BUSY||navigator.onLine===false)return false;const sess=await sessionCached();if(!sess?.companyId||!sess?.database)return false;const queue=queueRead();if(queue&&queue.companyId===sess.companyId&&!force)return false;__MASIL_REMOTE_SYNC_BUSY=true;setSyncing(true);try{let meta=null;try{meta=await read(sess.database,`${companyPath(sess.companyId)}/data/meta`,{ensureSchema:true})}catch{}const remoteHash=String(meta?.hash||'');const remoteRevision=Number(meta?.revision||meta?.updatedAt||0)||0;const localHash=String(localStorage.getItem(`masil_hash_${sess.companyId}`)||'');const localRevision=Number(localStorage.getItem(R.REV)||0)||0;if(!force&&remoteHash&&remoteHash===localHash&&remoteRevision<=localRevision)return false;const snapshot=await read(sess.database,`${companyPath(sess.companyId)}/data/snapshot`,{ensureSchema:true});if(!snapshot)return false;let hash=remoteHash;try{if(!hash)hash=snapshotHash(JSON.stringify(snapshot))}catch{}if(!force&&hash&&hash===localHash&&remoteRevision<=localRevision)return false;if(hash)localStorage.setItem(`masil_hash_${sess.companyId}`,hash);if(remoteRevision)localStorage.setItem(R.REV,String(remoteRevision));localStorage.setItem(R.LASTSYNC,String(Date.now()));await applyRemoteSnapshot(snapshot,'remote');return true}catch(e){return false}finally{__MASIL_REMOTE_SYNC_BUSY=false;setSyncing(false)}}
+let __MASIL_MEDIA_RETRY_AT=0;async function realtimeTick(){if(navigator.onLine===false)return;try{if(Date.now()>__MASIL_MEDIA_RETRY_AT){__MASIL_MEDIA_RETRY_AT=Date.now()+30000;syncPendingMedia().catch(()=>{})}if(queueRead())await flushQueue();else await pullRemoteSnapshot(false)}catch{}}
+function scheduleRealtimeTick(delay){if(__MASIL_REMOTE_SYNC_TIMER)clearTimeout(__MASIL_REMOTE_SYNC_TIMER);__MASIL_REMOTE_SYNC_TIMER=setTimeout(async()=>{await realtimeTick();scheduleRealtimeTick(document.hidden?2600:850)},delay)}
+function startRealtimeSync(){scheduleRealtimeTick(120)}
+function stopRealtimeSync(){if(__MASIL_REMOTE_SYNC_TIMER){clearTimeout(__MASIL_REMOTE_SYNC_TIMER);__MASIL_REMOTE_SYNC_TIMER=null}}
+
 function exportBackup(){const sess=readSessionFast()||{};const payload={format:'MASIL_BACKUP_V1',createdAt:nowIso(),company:{id:sess.companyId||'',name:sess.companyName||''},snapshot:buildLocalSnapshot()};downloadBlob(JSON.stringify(payload,null,2),`نسخة-احتياطية-${safe(sess.companyName||'المولد-الأصيل')}-${new Date().toISOString().slice(0,10)}.json`);return true}
 async function importBackupFile(file){if(!file)throw new Error('اختر ملف النسخة الاحتياطية.');let data;try{data=JSON.parse(await file.text())}catch{throw new Error('ملف النسخة الاحتياطية غير صالح.')}const snapshot=data?.format==='MASIL_BACKUP_V1'?data.snapshot:(data?.snapshot||data);if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot))throw new Error('ملف النسخة الاحتياطية لا يحتوي بيانات صالحة.');const sess=readSessionFast();if(sess?.companyId)await cacheFullSnapshot(sess.companyId,snapshot);importSnapshot(firstPageSnapshot(snapshot),{companyName:sess?.companyName||'المولد الأصيل'},{keepCache:true});await stageSnapshot({...snapshot,updatedAt:nowIso()});if(navigator.onLine!==false){try{await flushQueue()}catch{}}dispatchSyncState();return getSyncStatus()}
 function hasAdminLock(){return !!localStorage.getItem(R.ADMIN)}
@@ -4236,9 +4248,11 @@ async function rotateCurrentPassword(newPassword){const s=await readSession();if
 async function downloadCurrentFile(){const s=await readSession();if(!s?.account)throw new Error('لا توجد جلسة دخول.');if(s.account.roleType==='manager'){const access=await read(s.database,`${companyPath(s.companyId)}/access/company`,{ensureSchema:true}),row=access.manager,password=await unbox(row.secretBox,s.companyKey+'|ACCOUNT');const payload={companyId:s.companyId,companyKey:s.companyKey,companyName:s.companyName,database:s.database,expiresAt:s.expiresAt||'',maxUsers:s.maxUsers,account:{...row,secretBox:undefined,roleType:'manager'},fileId:`${row.id}_${row.authVersion}`};await prepareDownload(payload,password,`${s.companyName}-مدير.asil`);return row}else return downloadEmployeeFile(s.account)}
 async function syncEmployeeState(emp){const s=await readSession();if(!s?.companyId||s.account?.roleType!=='manager')return;const row=await read(s.database,`${companyPath(s.companyId)}/access/accounts/${encodeURIComponent(emp.id)}`,{ensureSchema:true});if(!row)return;await write(s.database,`${companyPath(s.companyId)}/access/accounts/${emp.id}`,{...row,name:emp.name,phone:emp.phone,roleTitle:emp.roleTitle||emp.role,permissions:emp.permissions||[],active:emp.active!==false,isFrozen:!!emp.isFrozen,updatedAt:nowIso()})}
 async function removeEmployeeAccess(id){const s=await readSession();if(!s?.companyId)return;await write(s.database,`${companyPath(s.companyId)}/access/accounts/${id}`,{id,deleted:true,active:false},true)}
-window.MoldRuntime={version:5,primeSession,readSession,readSessionFast,loginWithFile,logout,saveSnapshot,stageSnapshot,flushQueue,forceSync,getSyncStatus,buildLocalSnapshot,exportBackup,importBackupFile,clearAppData,prepareLocalCache,persistLocal,hydrateCollections,getCachedFullSnapshot,cacheFullSnapshot,hasAdminLock,setupAdminPassword,unlockAdmin,adminUnlocked,lockAdmin,saveMasterConfig,readMasterConfig,loadMasterData,reconcileMaster,saveDatabase,databaseCredentials,saveCompany,setCompanyStatus,downloadCompanyFile,upsertEmployeeAccess,downloadEmployeeFile,rotateCurrentPassword,downloadCurrentFile,syncEmployeeState,removeEmployeeAccess,computeEnd,uid,db:{ensure,read,write,list,pipeline}};
+window.MoldRuntime={version:5,primeSession,readSession,readSessionFast,loginWithFile,logout,saveSnapshot,stageSnapshot,flushQueue,forceSync,pullRemoteSnapshot,startRealtimeSync,stopRealtimeSync,getSyncStatus,buildLocalSnapshot,exportBackup,importBackupFile,clearAppData,prepareLocalCache,persistLocal,hydrateCollections,getCachedFullSnapshot,cacheFullSnapshot,hasAdminLock,setupAdminPassword,unlockAdmin,adminUnlocked,lockAdmin,saveMasterConfig,readMasterConfig,loadMasterData,reconcileMaster,saveDatabase,databaseCredentials,saveCompany,setCompanyStatus,downloadCompanyFile,upsertEmployeeAccess,downloadEmployeeFile,rotateCurrentPassword,downloadCurrentFile,syncEmployeeState,removeEmployeeAccess,computeEnd,uid,db:{ensure,read,write,list,pipeline}};
 primeSession().catch(()=>{});
-window.addEventListener('online',()=>{syncPendingMedia().catch(()=>{}).finally(()=>flushQueue().catch(()=>{}))});
+window.addEventListener('online',()=>{syncPendingMedia().catch(()=>{}).finally(()=>{realtimeTick().catch(()=>{});setTimeout(()=>pullRemoteSnapshot(true).catch(()=>{}),120)})});
+window.addEventListener('focus',()=>{realtimeTick().catch(()=>{})});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){realtimeTick().catch(()=>{});scheduleRealtimeTick(500)}});
 })();
 
 
@@ -4817,7 +4831,7 @@ const PlatformAdminView = ({ onBack }) => {
     const openCompany = (c = null) => setCompanyModal(c || { companyKey: rt.uid('KEY').replace(/-/g, '').slice(-10), durationUnit: 'month', durationCount: 1, maxUsers: 5, status: 'active', managerName: 'مدير النظام', managerUsername: 'manager' });
     if (!ready)
         return react_1.default.createElement("div", { className: "min-h-screen bg-slate-950 flex items-center justify-center p-4 font-cairo" }, react_1.default.createElement("div", { className: "w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl" }, react_1.default.createElement("div", { className: "text-center mb-5" }, react_1.default.createElement("img", { src: "./brand-logo.png", className: "w-20 h-20 object-contain mx-auto rounded-2xl border mb-3" }), react_1.default.createElement("h1", { className: "font-black text-xl" }, "\u0625\u062F\u0627\u0631\u0629 \u0645\u0646\u0635\u0629 \u0627\u0644\u0645\u0648\u0644\u062F \u0627\u0644\u0623\u0635\u064A\u0644"), react_1.default.createElement("p", { className: "text-xs text-slate-500 mt-1" }, hasLock ? 'أدخل كلمة مرور الإدارة' : 'إعداد الإدارة لأول مرة')), err && react_1.default.createElement("div", { className: "mb-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-xs" }, err), react_1.default.createElement("form", { onSubmit: unlock, className: "space-y-3" }, react_1.default.createElement("div", { className: "relative" }, react_1.default.createElement("input", { type: show ? 'text' : 'password', value: pass, onChange: e => setPass(e.target.value), required: true, className: "w-full p-3 pl-10 rounded-xl border", placeholder: "\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u0625\u062F\u0627\u0631\u0629" }), react_1.default.createElement("button", { type: "button", onClick: () => setShow(!show), className: "absolute left-3 top-3 text-slate-400" }, show ? react_1.default.createElement(lucide_react_1.EyeOff, { className: "w-5 h-5" }) : react_1.default.createElement(lucide_react_1.Eye, { className: "w-5 h-5" }))), !hasLock && react_1.default.createElement("input", { type: "password", value: pass2, onChange: e => setPass2(e.target.value), required: true, className: "w-full p-3 rounded-xl border", placeholder: "\u062A\u0623\u0643\u064A\u062F \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631" }), react_1.default.createElement("button", { className: "w-full p-3 rounded-xl bg-teal-600 text-white font-black" }, "\u0641\u062A\u062D \u0644\u0648\u062D\u0629 \u0627\u0644\u0625\u062F\u0627\u0631\u0629"), react_1.default.createElement("button", { type: "button", onClick: onBack, className: "w-full p-2 text-xs text-slate-500" }, "\u0627\u0644\u0639\u0648\u062F\u0629 \u0644\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644"))));
-    return react_1.default.createElement("div", { className: "min-h-screen bg-slate-50 dark:bg-slate-950 font-cairo text-slate-900 dark:text-white" }, react_1.default.createElement("header", { className: "sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800" }, react_1.default.createElement("div", { className: "max-w-7xl mx-auto px-4 h-16 flex items-center justify-between" }, react_1.default.createElement("div", { className: "flex items-center gap-3" }, react_1.default.createElement("img", { src: "./brand-logo.png", className: "w-11 h-11 rounded-xl border object-contain bg-white" }), react_1.default.createElement("div", null, react_1.default.createElement("div", { className: "font-black" }, "\u0625\u062F\u0627\u0631\u0629 \u0645\u0646\u0635\u0629 \u0627\u0644\u0645\u0648\u0644\u062F \u0627\u0644\u0623\u0635\u064A\u0644"), react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0623\u0645 \u2022 \u0642\u0648\u0627\u0639\u062F \u0627\u0644\u0634\u0631\u0643\u0627\u062A \u2022 \u0645\u0644\u0641\u0627\u062A \u0627\u0644\u062F\u062E\u0648\u0644"))), react_1.default.createElement("div", { className: "flex gap-2" }, react_1.default.createElement("button", { onClick: refresh, disabled: busy, className: "p-2 rounded-xl border bg-white dark:bg-slate-800" }, react_1.default.createElement(lucide_react_1.RotateCcw, { className: `w-4 h-4 ${busy ? 'animate-spin' : ''}` })), react_1.default.createElement("button", { onClick: () => { rt.lockAdmin(); setReady(false); }, className: "flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold" }, react_1.default.createElement(lucide_react_1.LogOut, { className: "w-4 h-4" }), "\u0642\u0641\u0644 \u0627\u0644\u0625\u062F\u0627\u0631\u0629")))), react_1.default.createElement("main", { className: "max-w-7xl mx-auto p-4 sm:p-6 space-y-5" }, (err || msg) && react_1.default.createElement("div", { className: `p-3 rounded-xl text-xs font-bold flex gap-2 ${err ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}` }, err ? react_1.default.createElement(lucide_react_1.AlertCircle, { className: "w-4 h-4" }) : react_1.default.createElement(lucide_react_1.CheckCircle2, { className: "w-4 h-4" }), err || msg, react_1.default.createElement("button", { onClick: () => { setErr(''); setMsg(''); }, className: "mr-auto" }, react_1.default.createElement(lucide_react_1.X, { className: "w-4 h-4" }))), react_1.default.createElement("div", { className: "grid grid-cols-2 lg:grid-cols-4 gap-3" }, react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0642\u0648\u0627\u0639\u062F \u0627\u0644\u0634\u0631\u0643\u0627\u062A"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1" }, dbs.length)), react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0634\u0631\u0643\u0627\u062A"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1" }, companies.length)), react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0627\u0644\u0634\u0631\u0643\u0627\u062A \u0627\u0644\u0646\u0634\u0637\u0629"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1 text-emerald-600" }, companies.filter(c => c.status === 'active').length)), react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0627\u0644\u0645\u0648\u0642\u0648\u0641\u0629/\u0627\u0644\u0645\u0646\u062A\u0647\u064A\u0629"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1 text-rose-600" }, companies.filter(c => c.status !== 'active' || (c.endAt && Date.now() >= new Date(c.endAt).getTime())).length))), react_1.default.createElement("section", { className: "bg-white dark:bg-slate-900 rounded-2xl border p-4 sm:p-5" }, react_1.default.createElement("div", { className: "flex items-center gap-2 mb-4" }, react_1.default.createElement(lucide_react_1.Landmark, { className: "w-5 h-5 text-teal-600" }), react_1.default.createElement("h2", { className: "font-black" }, "\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0623\u0645")), react_1.default.createElement("form", { onSubmit: saveMaster, className: "grid md:grid-cols-[1fr_1fr_auto] gap-3" }, react_1.default.createElement("input", { dir: "ltr", value: masterUrl, onChange: e => setMasterUrl(e.target.value), required: true, className: "p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "libsql://master....turso.io" }), react_1.default.createElement("input", { dir: "ltr", type: "password", value: masterToken, onChange: e => setMasterToken(e.target.value), required: true, className: "p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "Turso auth token" }), react_1.default.createElement("button", { disabled: busy, className: "px-4 py-2.5 rounded-xl bg-teal-600 text-white font-bold text-xs" }, "\u062D\u0641\u0638 \u0648\u0627\u062E\u062A\u0628\u0627\u0631")), react_1.default.createElement("p", { className: "text-[10px] text-slate-500 mt-2" }, "\u064A\u062A\u0645 \u062D\u0641\u0638 \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0623\u0645 \u0639\u0644\u0649 \u062C\u0647\u0627\u0632 \u0627\u0644\u0625\u062F\u0627\u0631\u0629 \u0641\u0642\u0637\u060C \u0648\u0645\u0646 \u062E\u0644\u0627\u0644\u0647\u0627 \u062A\u062A\u0645 \u0625\u062F\u0627\u0631\u0629 \u0642\u0627\u0639\u062F\u0629 \u0643\u0644 \u0634\u0631\u0643\u0629.")), react_1.default.createElement("section", { className: "bg-white dark:bg-slate-900 rounded-2xl border p-4 sm:p-5" }, react_1.default.createElement("div", { className: "flex items-center justify-between mb-4" }, react_1.default.createElement("div", { className: "flex items-center gap-2" }, react_1.default.createElement(lucide_react_1.Landmark, { className: "w-5 h-5 text-teal-600" }), react_1.default.createElement("h2", { className: "font-black" }, "\u0642\u0648\u0627\u0639\u062F \u0627\u0644\u0634\u0631\u0643\u0627\u062A")), react_1.default.createElement("button", { onClick: () => setDbModal({}), className: "flex items-center gap-1 px-3 py-2 rounded-xl bg-teal-600 text-white text-xs font-bold" }, react_1.default.createElement(lucide_react_1.Plus, { className: "w-4 h-4" }), "\u0625\u0636\u0627\u0641\u0629 \u0642\u0627\u0639\u062F\u0629")), react_1.default.createElement("div", { className: "overflow-x-auto" }, react_1.default.createElement("table", { className: "w-full min-w-[680px] text-xs" }, react_1.default.createElement("thead", null, react_1.default.createElement("tr", { className: "text-slate-500 border-b" }, react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0627\u0633\u0645"), react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0645\u0639\u0631\u0641"), react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0634\u0631\u0643\u0627\u062A"), react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0625\u062C\u0631\u0627\u0621\u0627\u062A"))), react_1.default.createElement("tbody", null, dbs.length ? dbs.map(d => react_1.default.createElement("tr", { key: d.id, className: "border-b last:border-0" }, react_1.default.createElement("td", { className: "p-2 font-bold" }, d.name), react_1.default.createElement("td", { className: "p-2 font-mono text-[10px]" }, d.id), react_1.default.createElement("td", { className: "p-2" }, companies.filter(c => c.databaseId === d.id).length), react_1.default.createElement("td", { className: "p-2" }, react_1.default.createElement("button", { onClick: async () => {
+    return react_1.default.createElement("div", { className: "min-h-screen bg-slate-50 dark:bg-slate-950 font-cairo text-slate-900 dark:text-white" }, react_1.default.createElement("header", { className: "sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800" }, react_1.default.createElement("div", { className: "max-w-7xl mx-auto px-4 h-16 flex items-center justify-between" }, react_1.default.createElement("div", { className: "flex items-center gap-3" }, react_1.default.createElement("img", { src: "./brand-logo.png", className: "w-11 h-11 rounded-xl border object-contain bg-white" }), react_1.default.createElement("div", null, react_1.default.createElement("div", { className: "font-black" }, "\u0625\u062F\u0627\u0631\u0629 \u0645\u0646\u0635\u0629 \u0627\u0644\u0645\u0648\u0644\u062F \u0627\u0644\u0623\u0635\u064A\u0644"), react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0623\u0645 \u2022 \u0642\u0648\u0627\u0639\u062F \u0627\u0644\u0634\u0631\u0643\u0627\u062A \u2022 \u0645\u0644\u0641\u0627\u062A \u0627\u0644\u062F\u062E\u0648\u0644"))), react_1.default.createElement("div", { className: "flex gap-2" }, react_1.default.createElement("button", { onClick: refresh, disabled: busy, className: "p-2 rounded-xl border bg-white dark:bg-slate-800" }, react_1.default.createElement(lucide_react_1.RotateCcw, { className: `w-4 h-4 ${busy ? 'animate-spin' : ''}` })), react_1.default.createElement("button", { onClick: () => { rt.lockAdmin(); setReady(false); }, className: "flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold" }, react_1.default.createElement(lucide_react_1.LogOut, { className: "w-4 h-4" }), "\u0642\u0641\u0644 \u0627\u0644\u0625\u062F\u0627\u0631\u0629")))), react_1.default.createElement("main", { className: "max-w-7xl mx-auto p-4 sm:p-6 space-y-5" }, (err || msg) && react_1.default.createElement("div", { className: `p-3 rounded-xl text-xs font-bold flex gap-2 ${err ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}` }, err ? react_1.default.createElement(lucide_react_1.AlertCircle, { className: "w-4 h-4" }) : react_1.default.createElement(lucide_react_1.CheckCircle2, { className: "w-4 h-4" }), err || msg, react_1.default.createElement("button", { onClick: () => { setErr(''); setMsg(''); }, className: "mr-auto" }, react_1.default.createElement(lucide_react_1.X, { className: "w-4 h-4" }))), react_1.default.createElement("div", { className: "grid grid-cols-2 lg:grid-cols-4 gap-3" }, react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0642\u0648\u0627\u0639\u062F \u0627\u0644\u0634\u0631\u0643\u0627\u062A"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1" }, dbs.length)), react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0634\u0631\u0643\u0627\u062A"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1" }, companies.length)), react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0627\u0644\u0634\u0631\u0643\u0627\u062A \u0627\u0644\u0646\u0634\u0637\u0629"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1 text-emerald-600" }, companies.filter(c => c.status === 'active').length)), react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 p-4 rounded-2xl border" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "\u0627\u0644\u0645\u0648\u0642\u0648\u0641\u0629/\u0627\u0644\u0645\u0646\u062A\u0647\u064A\u0629"), react_1.default.createElement("div", { className: "text-2xl font-black mt-1 text-rose-600" }, companies.filter(c => c.status !== 'active' || (c.endAt && Date.now() >= new Date(c.endAt).getTime())).length))), react_1.default.createElement("section", { className: "bg-white dark:bg-slate-900 rounded-2xl border p-4 sm:p-5" }, react_1.default.createElement("div", { className: "flex items-center gap-2 mb-4" }, react_1.default.createElement(lucide_react_1.Landmark, { className: "w-5 h-5 text-teal-600" }), react_1.default.createElement("h2", { className: "font-black" }, "\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0623\u0645")), react_1.default.createElement("form", { onSubmit: saveMaster, className: "grid md:grid-cols-[1fr_1fr_auto] gap-3" }, react_1.default.createElement("input", { dir: "ltr", value: masterUrl, onChange: e => setMasterUrl(e.target.value), required: true, className: "p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "رابط قاعدة الإدارة" }), react_1.default.createElement("input", { dir: "ltr", type: "password", value: masterToken, onChange: e => setMasterToken(e.target.value), required: true, className: "p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "الخدمة السحابية auth token" }), react_1.default.createElement("button", { disabled: busy, className: "px-4 py-2.5 rounded-xl bg-teal-600 text-white font-bold text-xs" }, "\u062D\u0641\u0638 \u0648\u0627\u062E\u062A\u0628\u0627\u0631")), react_1.default.createElement("p", { className: "text-[10px] text-slate-500 mt-2" }, "\u064A\u062A\u0645 \u062D\u0641\u0638 \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0623\u0645 \u0639\u0644\u0649 \u062C\u0647\u0627\u0632 \u0627\u0644\u0625\u062F\u0627\u0631\u0629 \u0641\u0642\u0637\u060C \u0648\u0645\u0646 \u062E\u0644\u0627\u0644\u0647\u0627 \u062A\u062A\u0645 \u0625\u062F\u0627\u0631\u0629 \u0642\u0627\u0639\u062F\u0629 \u0643\u0644 \u0634\u0631\u0643\u0629.")), react_1.default.createElement("section", { className: "bg-white dark:bg-slate-900 rounded-2xl border p-4 sm:p-5" }, react_1.default.createElement("div", { className: "flex items-center justify-between mb-4" }, react_1.default.createElement("div", { className: "flex items-center gap-2" }, react_1.default.createElement(lucide_react_1.Landmark, { className: "w-5 h-5 text-teal-600" }), react_1.default.createElement("h2", { className: "font-black" }, "\u0642\u0648\u0627\u0639\u062F \u0627\u0644\u0634\u0631\u0643\u0627\u062A")), react_1.default.createElement("button", { onClick: () => setDbModal({}), className: "flex items-center gap-1 px-3 py-2 rounded-xl bg-teal-600 text-white text-xs font-bold" }, react_1.default.createElement(lucide_react_1.Plus, { className: "w-4 h-4" }), "\u0625\u0636\u0627\u0641\u0629 \u0642\u0627\u0639\u062F\u0629")), react_1.default.createElement("div", { className: "overflow-x-auto" }, react_1.default.createElement("table", { className: "w-full min-w-[680px] text-xs" }, react_1.default.createElement("thead", null, react_1.default.createElement("tr", { className: "text-slate-500 border-b" }, react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0627\u0633\u0645"), react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0645\u0639\u0631\u0641"), react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0634\u0631\u0643\u0627\u062A"), react_1.default.createElement("th", { className: "text-right p-2" }, "\u0627\u0644\u0625\u062C\u0631\u0627\u0621\u0627\u062A"))), react_1.default.createElement("tbody", null, dbs.length ? dbs.map(d => react_1.default.createElement("tr", { key: d.id, className: "border-b last:border-0" }, react_1.default.createElement("td", { className: "p-2 font-bold" }, d.name), react_1.default.createElement("td", { className: "p-2 font-mono text-[10px]" }, d.id), react_1.default.createElement("td", { className: "p-2" }, companies.filter(c => c.databaseId === d.id).length), react_1.default.createElement("td", { className: "p-2" }, react_1.default.createElement("button", { onClick: async () => {
             try {
                 const cfg = await rt.databaseCredentials(d);
                 setDbModal({ ...d, ...cfg });
@@ -4868,7 +4882,7 @@ const PlatformAdminView = ({ onBack }) => {
                     setBusy(false);
                 }
             }, className: `px-2 py-1 rounded-lg font-bold ${c.status === 'active' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}` }, c.status === 'active' ? 'إيقاف' : 'تفعيل'))));
-    }) : react_1.default.createElement("tr", null, react_1.default.createElement("td", { colSpan: 9, className: "p-8 text-center text-slate-400" }, "\u0644\u0627 \u062A\u0648\u062C\u062F \u0634\u0631\u0643\u0627\u062A \u0628\u0639\u062F."))))))), dbModal && react_1.default.createElement("div", { className: "fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" }, react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg p-5" }, react_1.default.createElement("div", { className: "flex justify-between mb-4" }, react_1.default.createElement("h3", { className: "font-black" }, dbModal.id ? 'تعديل قاعدة' : 'إضافة قاعدة'), react_1.default.createElement("button", { onClick: () => setDbModal(null) }, react_1.default.createElement(lucide_react_1.X, { className: "w-5 h-5" }))), react_1.default.createElement("form", { onSubmit: saveDb, className: "space-y-3" }, react_1.default.createElement("input", { type: "hidden", name: "id", value: dbModal.id || '' }), react_1.default.createElement("input", { name: "name", defaultValue: dbModal.name || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "\u0627\u0633\u0645 \u0627\u0644\u0642\u0627\u0639\u062F\u0629" }), react_1.default.createElement("input", { dir: "ltr", name: "databaseURL", defaultValue: dbModal.databaseURL || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "libsql://..." }), react_1.default.createElement("input", { dir: "ltr", type: "password", name: "authToken", defaultValue: dbModal.authToken || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "Auth token" }), react_1.default.createElement("button", { disabled: busy, className: "w-full p-2.5 rounded-xl bg-teal-600 text-white font-black" }, "\u062D\u0641\u0638 \u0627\u0644\u0642\u0627\u0639\u062F\u0629")))), companyModal && react_1.default.createElement("div", { className: "fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3" }, react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5" }, react_1.default.createElement("div", { className: "flex justify-between mb-4" }, react_1.default.createElement("h3", { className: "font-black" }, companyModal.id ? 'تعديل الشركة' : 'إضافة شركة جديدة'), react_1.default.createElement("button", { onClick: () => setCompanyModal(null) }, react_1.default.createElement(lucide_react_1.X, { className: "w-5 h-5" }))), react_1.default.createElement("form", { onSubmit: saveCompany, className: "grid sm:grid-cols-2 gap-3 text-xs" }, react_1.default.createElement("input", { type: "hidden", name: "id", value: companyModal.id || '' }), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0633\u0645 \u0627\u0644\u0634\u0631\u0643\u0629"), react_1.default.createElement("input", { name: "companyName", defaultValue: companyModal.companyName || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0634\u0631\u0643\u0629"), react_1.default.createElement("input", { name: "companyKey", dir: "ltr", defaultValue: companyModal.companyKey || '', required: true, className: "w-full p-2.5 rounded-xl border font-mono dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0634\u0631\u0643\u0629"), react_1.default.createElement("input", { type: "hidden", name: "databaseId", value: companyModal.databaseId || '' }), react_1.default.createElement(SmartSelect_1.SmartSelect, { value: companyModal.databaseId || '', onChange: (e) => setCompanyModal((v) => ({ ...v, databaseId: e.target.value })), className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "\u0627\u062E\u062A\u0631 \u0627\u0644\u0642\u0627\u0639\u062F\u0629..." }, react_1.default.createElement("option", { value: "" }, "\u0627\u062E\u062A\u0631 \u0627\u0644\u0642\u0627\u0639\u062F\u0629..."), dbs.map(d => react_1.default.createElement("option", { key: d.id, value: d.id }, d.name)))), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 \u0644\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646"), react_1.default.createElement("input", { name: "maxUsers", type: "number", min: "1", defaultValue: companyModal.maxUsers || 5, required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0633\u0645 \u0627\u0644\u0645\u062F\u064A\u0631"), react_1.default.createElement("input", { name: "managerName", defaultValue: ((_a = companyModal.manager) === null || _a === void 0 ? void 0 : _a.name) || companyModal.managerName || 'مدير النظام', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0633\u0645 \u0645\u0633\u062A\u062E\u062F\u0645 \u0627\u0644\u0645\u062F\u064A\u0631"), react_1.default.createElement("input", { name: "managerUsername", defaultValue: ((_b = companyModal.manager) === null || _b === void 0 ? void 0 : _b.username) || companyModal.managerUsername || 'manager', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0645\u062F\u0629 \u0627\u0644\u0645\u0641\u062A\u0627\u062D"), react_1.default.createElement("div", { className: "grid grid-cols-2 gap-2" }, react_1.default.createElement("input", { name: "durationCount", type: "number", min: "1", defaultValue: companyModal.durationCount || 1, className: "p-2.5 rounded-xl border dark:bg-slate-950" }), react_1.default.createElement("div", null, react_1.default.createElement("input", { type: "hidden", name: "durationUnit", value: companyModal.durationUnit || 'month' }), react_1.default.createElement(SmartSelect_1.SmartSelect, { value: companyModal.durationUnit || 'month', onChange: (e) => setCompanyModal((v) => ({ ...v, durationUnit: e.target.value })), className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" }, react_1.default.createElement("option", { value: "day" }, "\u064A\u0648\u0645"), react_1.default.createElement("option", { value: "week" }, "\u0623\u0633\u0628\u0648\u0639"), react_1.default.createElement("option", { value: "month" }, "\u0634\u0647\u0631"), react_1.default.createElement("option", { value: "year" }, "\u0633\u0646\u0629"), react_1.default.createElement("option", { value: "lifetime" }, "\u0645\u062F\u0649 \u0627\u0644\u062D\u064A\u0627\u0629"))))), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0644\u062D\u0627\u0644\u0629"), react_1.default.createElement("input", { type: "hidden", name: "status", value: companyModal.status || 'active' }), react_1.default.createElement(SmartSelect_1.SmartSelect, { value: companyModal.status || 'active', onChange: (e) => setCompanyModal((v) => ({ ...v, status: e.target.value })), className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" }, react_1.default.createElement("option", { value: "active" }, "\u0646\u0634\u0637"), react_1.default.createElement("option", { value: "stopped" }, "\u0645\u0648\u0642\u0648\u0641"))), react_1.default.createElement("label", { className: "space-y-1 sm:col-span-2" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u0645\u062F\u064A\u0631 ", companyModal.id ? '(اتركها فارغة بدون تغيير)' : '*'), react_1.default.createElement("input", { type: "password", name: "managerPassword", required: !companyModal.id, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), companyModal.id && react_1.default.createElement("label", { className: "sm:col-span-2 flex items-center gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded-xl" }, react_1.default.createElement("input", { type: "checkbox", name: "keepEnd", defaultChecked: true }), react_1.default.createElement("span", null, "\u0627\u0644\u062D\u0641\u0627\u0638 \u0639\u0644\u0649 \u062A\u0627\u0631\u064A\u062E \u0627\u0644\u0627\u0646\u062A\u0647\u0627\u0621 \u0627\u0644\u062D\u0627\u0644\u064A \u0639\u0646\u062F \u062A\u0639\u062F\u064A\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0634\u0631\u0643\u0629")), react_1.default.createElement("div", { className: "sm:col-span-2" }, react_1.default.createElement("button", { disabled: busy, className: "w-full p-3 rounded-xl bg-teal-600 text-white font-black" }, "\u062D\u0641\u0638 \u0627\u0644\u0634\u0631\u0643\u0629"))))));
+    }) : react_1.default.createElement("tr", null, react_1.default.createElement("td", { colSpan: 9, className: "p-8 text-center text-slate-400" }, "\u0644\u0627 \u062A\u0648\u062C\u062F \u0634\u0631\u0643\u0627\u062A \u0628\u0639\u062F."))))))), dbModal && react_1.default.createElement("div", { className: "fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" }, react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg p-5" }, react_1.default.createElement("div", { className: "flex justify-between mb-4" }, react_1.default.createElement("h3", { className: "font-black" }, dbModal.id ? 'تعديل قاعدة' : 'إضافة قاعدة'), react_1.default.createElement("button", { onClick: () => setDbModal(null) }, react_1.default.createElement(lucide_react_1.X, { className: "w-5 h-5" }))), react_1.default.createElement("form", { onSubmit: saveDb, className: "space-y-3" }, react_1.default.createElement("input", { type: "hidden", name: "id", value: dbModal.id || '' }), react_1.default.createElement("input", { name: "name", defaultValue: dbModal.name || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "\u0627\u0633\u0645 \u0627\u0644\u0642\u0627\u0639\u062F\u0629" }), react_1.default.createElement("input", { dir: "ltr", name: "databaseURL", defaultValue: dbModal.databaseURL || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "رابط القاعدة" }), react_1.default.createElement("input", { dir: "ltr", type: "password", name: "authToken", defaultValue: dbModal.authToken || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "Auth token" }), react_1.default.createElement("button", { disabled: busy, className: "w-full p-2.5 rounded-xl bg-teal-600 text-white font-black" }, "\u062D\u0641\u0638 \u0627\u0644\u0642\u0627\u0639\u062F\u0629")))), companyModal && react_1.default.createElement("div", { className: "fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3" }, react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5" }, react_1.default.createElement("div", { className: "flex justify-between mb-4" }, react_1.default.createElement("h3", { className: "font-black" }, companyModal.id ? 'تعديل الشركة' : 'إضافة شركة جديدة'), react_1.default.createElement("button", { onClick: () => setCompanyModal(null) }, react_1.default.createElement(lucide_react_1.X, { className: "w-5 h-5" }))), react_1.default.createElement("form", { onSubmit: saveCompany, className: "grid sm:grid-cols-2 gap-3 text-xs" }, react_1.default.createElement("input", { type: "hidden", name: "id", value: companyModal.id || '' }), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0633\u0645 \u0627\u0644\u0634\u0631\u0643\u0629"), react_1.default.createElement("input", { name: "companyName", defaultValue: companyModal.companyName || '', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0634\u0631\u0643\u0629"), react_1.default.createElement("input", { name: "companyKey", dir: "ltr", defaultValue: companyModal.companyKey || '', required: true, className: "w-full p-2.5 rounded-xl border font-mono dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0634\u0631\u0643\u0629"), react_1.default.createElement("input", { type: "hidden", name: "databaseId", value: companyModal.databaseId || '' }), react_1.default.createElement(SmartSelect_1.SmartSelect, { value: companyModal.databaseId || '', onChange: (e) => setCompanyModal((v) => ({ ...v, databaseId: e.target.value })), className: "w-full p-2.5 rounded-xl border dark:bg-slate-950", placeholder: "\u0627\u062E\u062A\u0631 \u0627\u0644\u0642\u0627\u0639\u062F\u0629..." }, react_1.default.createElement("option", { value: "" }, "\u0627\u062E\u062A\u0631 \u0627\u0644\u0642\u0627\u0639\u062F\u0629..."), dbs.map(d => react_1.default.createElement("option", { key: d.id, value: d.id }, d.name)))), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 \u0644\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646"), react_1.default.createElement("input", { name: "maxUsers", type: "number", min: "1", defaultValue: companyModal.maxUsers || 5, required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0633\u0645 \u0627\u0644\u0645\u062F\u064A\u0631"), react_1.default.createElement("input", { name: "managerName", defaultValue: ((_a = companyModal.manager) === null || _a === void 0 ? void 0 : _a.name) || companyModal.managerName || 'مدير النظام', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0633\u0645 \u0645\u0633\u062A\u062E\u062F\u0645 \u0627\u0644\u0645\u062F\u064A\u0631"), react_1.default.createElement("input", { name: "managerUsername", defaultValue: ((_b = companyModal.manager) === null || _b === void 0 ? void 0 : _b.username) || companyModal.managerUsername || 'manager', required: true, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0645\u062F\u0629 \u0627\u0644\u0645\u0641\u062A\u0627\u062D"), react_1.default.createElement("div", { className: "grid grid-cols-2 gap-2" }, react_1.default.createElement("input", { name: "durationCount", type: "number", min: "1", defaultValue: companyModal.durationCount || 1, className: "p-2.5 rounded-xl border dark:bg-slate-950" }), react_1.default.createElement("div", null, react_1.default.createElement("input", { type: "hidden", name: "durationUnit", value: companyModal.durationUnit || 'month' }), react_1.default.createElement(SmartSelect_1.SmartSelect, { value: companyModal.durationUnit || 'month', onChange: (e) => setCompanyModal((v) => ({ ...v, durationUnit: e.target.value })), className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" }, react_1.default.createElement("option", { value: "day" }, "\u064A\u0648\u0645"), react_1.default.createElement("option", { value: "week" }, "\u0623\u0633\u0628\u0648\u0639"), react_1.default.createElement("option", { value: "month" }, "\u0634\u0647\u0631"), react_1.default.createElement("option", { value: "year" }, "\u0633\u0646\u0629"), react_1.default.createElement("option", { value: "lifetime" }, "\u0645\u062F\u0649 \u0627\u0644\u062D\u064A\u0627\u0629"))))), react_1.default.createElement("label", { className: "space-y-1" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0627\u0644\u062D\u0627\u0644\u0629"), react_1.default.createElement("input", { type: "hidden", name: "status", value: companyModal.status || 'active' }), react_1.default.createElement(SmartSelect_1.SmartSelect, { value: companyModal.status || 'active', onChange: (e) => setCompanyModal((v) => ({ ...v, status: e.target.value })), className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" }, react_1.default.createElement("option", { value: "active" }, "\u0646\u0634\u0637"), react_1.default.createElement("option", { value: "stopped" }, "\u0645\u0648\u0642\u0648\u0641"))), react_1.default.createElement("label", { className: "space-y-1 sm:col-span-2" }, react_1.default.createElement("span", { className: "font-bold" }, "\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u0645\u062F\u064A\u0631 ", companyModal.id ? '(اتركها فارغة بدون تغيير)' : '*'), react_1.default.createElement("input", { type: "password", name: "managerPassword", required: !companyModal.id, className: "w-full p-2.5 rounded-xl border dark:bg-slate-950" })), companyModal.id && react_1.default.createElement("label", { className: "sm:col-span-2 flex items-center gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded-xl" }, react_1.default.createElement("input", { type: "checkbox", name: "keepEnd", defaultChecked: true }), react_1.default.createElement("span", null, "\u0627\u0644\u062D\u0641\u0627\u0638 \u0639\u0644\u0649 \u062A\u0627\u0631\u064A\u062E \u0627\u0644\u0627\u0646\u062A\u0647\u0627\u0621 \u0627\u0644\u062D\u0627\u0644\u064A \u0639\u0646\u062F \u062A\u0639\u062F\u064A\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0634\u0631\u0643\u0629")), react_1.default.createElement("div", { className: "sm:col-span-2" }, react_1.default.createElement("button", { disabled: busy, className: "w-full p-3 rounded-xl bg-teal-600 text-white font-black" }, "\u062D\u0641\u0638 \u0627\u0644\u0634\u0631\u0643\u0629"))))));
 };
 exports.PlatformAdminView = PlatformAdminView;
 },
@@ -5001,7 +5015,7 @@ const CloudBridge = () => {
     const a = (0, AppContext_1.useApp)();
     const first = (0, react_1.useRef)(true);
     const timer = (0, react_1.useRef)(null);
-    (0, react_1.useEffect)(() => { if (!a.isAuthenticated) return; if (first.current) { first.current = false; return; } const snapshot = { settings: a.settings, zones: a.zones, panels: a.panels, subscribers: a.subscribers, meters: a.meters, invoices: a.invoices, financialAccounts: a.financialAccounts, expenseTypes: a.expenseTypes, transactions: a.transactions, employees: a.employees, tasks: a.tasks, timeline: a.timeline, supportMessages: a.supportMessages, generators: a.generators, timeLogs: a.timeLogs, updatedAt: new Date().toISOString() }; window.MoldRuntime.stageSnapshot(snapshot).catch((e) => console.warn('sync staged', e?.message)); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => { window.MoldRuntime.flushQueue().catch((e) => console.warn('sync deferred', e?.message)); }, 1600); return () => timer.current && clearTimeout(timer.current); }, [a.isAuthenticated, a.settings, a.zones, a.panels, a.subscribers, a.meters, a.invoices, a.financialAccounts, a.expenseTypes, a.transactions, a.employees, a.tasks, a.timeline, a.supportMessages, a.generators, a.timeLogs]);
+    (0, react_1.useEffect)(() => { if (!a.isAuthenticated) return; if (first.current) { first.current = false; return; } if (Date.now() < Number(window.__MASIL_SUPPRESS_PUSH_UNTIL||0)) return; const snapshot = { settings: a.settings, zones: a.zones, panels: a.panels, subscribers: a.subscribers, meters: a.meters, invoices: a.invoices, financialAccounts: a.financialAccounts, expenseTypes: a.expenseTypes, transactions: a.transactions, employees: a.employees, tasks: a.tasks, timeline: a.timeline, supportMessages: a.supportMessages, generators: a.generators, timeLogs: a.timeLogs, updatedAt: new Date().toISOString() }; window.MoldRuntime.stageSnapshot(snapshot).catch((e) => console.warn('sync staged', e?.message)); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => { window.MoldRuntime.flushQueue().catch((e) => console.warn('sync deferred', e?.message)); }, 90); return () => timer.current && clearTimeout(timer.current); }, [a.isAuthenticated, a.settings, a.zones, a.panels, a.subscribers, a.meters, a.invoices, a.financialAccounts, a.expenseTypes, a.transactions, a.employees, a.tasks, a.timeline, a.supportMessages, a.generators, a.timeLogs]);
     return null;
 };
 exports.CloudBridge = CloudBridge;
@@ -5102,12 +5116,12 @@ exports.BarcodeAndQR = exports.QRCodeVisual = exports.Barcode = void 0;
 const react_1 = __importDefault(require("react"));
 const C128=[[2,1,2,2,2,2],[2,2,2,1,2,2],[2,2,2,2,2,1],[1,2,1,2,2,3],[1,2,1,3,2,2],[1,3,1,2,2,2],[1,2,2,2,1,3],[1,2,2,3,1,2],[1,3,2,2,1,2],[2,2,1,2,1,3],[2,2,1,3,1,2],[2,3,1,2,1,2],[1,1,2,2,3,2],[1,2,2,1,3,2],[1,2,2,2,3,1],[1,1,3,2,2,2],[1,2,3,1,2,2],[1,2,3,2,2,1],[2,2,3,2,1,1],[2,2,1,1,3,2],[2,2,1,2,3,1],[2,1,3,2,1,2],[2,2,3,1,1,2],[3,1,2,1,3,1],[3,1,1,2,2,2],[3,2,1,1,2,2],[3,2,1,2,2,1],[3,1,2,2,1,2],[3,2,2,1,1,2],[3,2,2,2,1,1],[2,1,2,1,2,3],[2,1,2,3,2,1],[2,3,2,1,2,1],[1,1,1,3,2,3],[1,3,1,1,2,3],[1,3,1,3,2,1],[1,1,2,3,1,3],[1,3,2,1,1,3],[1,3,2,3,1,1],[2,1,1,3,1,3],[2,3,1,1,1,3],[2,3,1,3,1,1],[1,1,2,1,3,3],[1,1,2,3,3,1],[1,3,2,1,3,1],[1,1,3,1,2,3],[1,1,3,3,2,1],[1,3,3,1,2,1],[3,1,3,1,2,1],[2,1,1,3,3,1],[2,3,1,1,3,1],[2,1,3,1,1,3],[2,1,3,3,1,1],[2,1,3,1,3,1],[3,1,1,1,2,3],[3,1,1,3,2,1],[3,3,1,1,2,1],[3,1,2,1,1,3],[3,1,2,3,1,1],[3,3,2,1,1,1],[3,1,4,1,1,1],[2,2,1,4,1,1],[4,3,1,1,1,1],[1,1,1,2,2,4],[1,1,1,4,2,2],[1,2,1,1,2,4],[1,2,1,4,2,1],[1,4,1,1,2,2],[1,4,1,2,2,1],[1,1,2,2,1,4],[1,1,2,4,1,2],[1,2,2,1,1,4],[1,2,2,4,1,1],[1,4,2,1,1,2],[1,4,2,2,1,1],[2,4,1,2,1,1],[2,2,1,1,1,4],[4,1,3,1,1,1],[2,4,1,1,1,2],[1,3,4,1,1,1],[1,1,1,2,4,2],[1,2,1,1,4,2],[1,2,1,2,4,1],[1,1,4,2,1,2],[1,2,4,1,1,2],[1,2,4,2,1,1],[4,1,1,2,1,2],[4,2,1,1,1,2],[4,2,1,2,1,1],[2,1,2,1,4,1],[2,1,4,1,2,1],[4,1,2,1,2,1],[1,1,1,1,4,3],[1,1,1,3,4,1],[1,3,1,1,4,1],[1,1,4,1,1,3],[1,1,4,3,1,1],[4,1,1,1,1,3],[4,1,1,3,1,1],[1,1,3,1,4,1],[1,1,4,1,3,1],[3,1,1,1,4,1],[4,1,1,1,3,1],[2,1,1,4,1,2],[2,1,1,2,1,4],[2,1,1,2,3,2],[2,3,3,1,1,1,2]];
 function code128Bars(value){const clean=String(value||'INV-2026-0001').replace(/[^\x20-\x7E]/g,'?');const codes=[104,...Array.from(clean).map(ch=>ch.charCodeAt(0)-32)];let sum=104;for(let i=1;i<codes.length;i++)sum+=codes[i]*i;codes.push(sum%103,106);let x=10;const rects=[];for(const code of codes){const pat=C128[code]||C128[31];for(let i=0;i<pat.length;i++){const w=pat[i];if(i%2===0)rects.push({x,w});x+=w;}}return{clean,rects,width:x+10}}
-const Barcode = ({ value, className = '', height = 44 }) => {const b=code128Bars(value);return react_1.default.createElement("div",{className:`flex flex-col items-center justify-center ${className}`},react_1.default.createElement("svg",{viewBox:`0 0 ${b.width} ${height}`,className:"w-full max-w-[250px] h-11",preserveAspectRatio:"xMidYMid meet",role:"img","aria-label":`Barcode ${b.clean}`,shapeRendering:"crispEdges"},b.rects.map((r,i)=>react_1.default.createElement("rect",{key:i,x:r.x,y:0,width:r.w,height:height,fill:"#000"}))),react_1.default.createElement("span",{className:"font-mono text-[9px] tracking-wider text-slate-700 font-bold mt-1",dir:"ltr"},b.clean));};
+const Barcode = ({ value, className = '', height = 38 }) => {const b=code128Bars(value);return react_1.default.createElement("div",{className:`flex flex-col items-center justify-center ${className}`},react_1.default.createElement("svg",{viewBox:`0 0 ${b.width} ${height}`,className:"w-full max-w-[150px] h-8",preserveAspectRatio:"xMidYMid meet",role:"img","aria-label":`Barcode ${b.clean}`,shapeRendering:"crispEdges"},b.rects.map((r,i)=>react_1.default.createElement("rect",{key:i,x:r.x,y:0,width:r.w,height:height,fill:"#000"}))),react_1.default.createElement("span",{className:"font-mono text-[8px] tracking-wide text-slate-700 font-bold mt-1 text-center leading-4",dir:"ltr"},b.clean));};
 exports.Barcode=Barcode;
 function qrMatrix(text){const N=29,DATA_CW=55,EC_CW=15;const bytes=Array.from(new TextEncoder().encode(String(text??''))).slice(0,53),bits=[];const put=(num,len)=>{for(let i=len-1;i>=0;i--)bits.push(((num>>>i)&1)!==0)};put(4,4);put(bytes.length,8);for(const b of bytes)put(b,8);const limit=DATA_CW*8;for(let i=0;i<Math.min(4,limit-bits.length);i++)bits.push(false);while(bits.length%8)bits.push(false);const data=[];for(let i=0;i<bits.length;i+=8){let v=0;for(let j=0;j<8;j++)v=(v<<1)|(bits[i+j]?1:0);data.push(v)}let pad=0;while(data.length<DATA_CW)data.push((pad++%2===0)?0xEC:0x11);const exp=new Array(512).fill(0),log=new Array(256).fill(0);let x=1;for(let i=0;i<255;i++){exp[i]=x;log[x]=i;x<<=1;if(x&0x100)x^=0x11d}for(let i=255;i<512;i++)exp[i]=exp[i-255];const mul=(a,b)=>a&&b?exp[log[a]+log[b]]:0;const gen=[1,29,196,111,163,112,74,10,105,105,139,132,151,32,134,26];const msg=data.concat(new Array(EC_CW).fill(0));for(let i=0;i<data.length;i++){const coef=msg[i];if(!coef)continue;for(let j=0;j<gen.length;j++)msg[i+j]^=mul(gen[j],coef)}const code=data.concat(msg.slice(data.length));const m=Array.from({length:N},()=>Array(N).fill(null));function finder(row,col){for(let r=-1;r<=7;r++){if(row+r<0||row+r>=N)continue;for(let c=-1;c<=7;c++){if(col+c<0||col+c>=N)continue;const black=((0<=r&&r<=6&&(c===0||c===6))||(0<=c&&c<=6&&(r===0||r===6))||(2<=r&&r<=4&&2<=c&&c<=4));m[row+r][col+c]=black}}}finder(0,0);finder(N-7,0);finder(0,N-7);for(const row of [6,22])for(const col of [6,22]){if(m[row][col]!==null)continue;for(let r=-2;r<=2;r++)for(let c=-2;c<=2;c++)m[row+r][col+c]=(Math.max(Math.abs(r),Math.abs(c))!==1)}for(let r=8;r<N-8;r++)if(m[r][6]===null)m[r][6]=(r%2===0);for(let c=8;c<N-8;c++)if(m[6][c]===null)m[6][c]=(c%2===0);function bchDigit(v){let d=0;while(v){d++;v>>>=1}return d}const G15=0x537,G15_MASK=0x5412;function bchInfo(d){let v=d<<10;while(bchDigit(v)-bchDigit(G15)>=0)v^=G15<<(bchDigit(v)-bchDigit(G15));return((d<<10)|v)^G15_MASK}const info=bchInfo(8);for(let i=0;i<15;i++){const mod=((info>>i)&1)===1;if(i<6)m[i][8]=mod;else if(i<8)m[i+1][8]=mod;else m[N-15+i][8]=mod;if(i<8)m[8][N-i-1]=mod;else if(i<9)m[8][15-i]=mod;else m[8][14-i]=mod}m[N-8][8]=true;let inc=-1,row=N-1,bitIndex=7,byteIndex=0;for(let base=N-1;base>0;base-=2){let col=base;if(col<=6)col--;while(true){for(const c of [col,col-1]){if(m[row][c]===null){let dark=false;if(byteIndex<code.length)dark=((code[byteIndex]>>bitIndex)&1)===1;if((row+c)%2===0)dark=!dark;m[row][c]=dark;if(--bitIndex===-1){byteIndex++;bitIndex=7}}}row+=inc;if(row<0||row>=N){row-=inc;inc=-inc;break}}}return m}
 const QRCodeVisual = ({ value, size = 70, className = '' }) => {const m=qrMatrix(value),q=4,N=m.length,total=N+q*2;const cells=[];for(let r=0;r<N;r++)for(let c=0;c<N;c++)if(m[r][c])cells.push(react_1.default.createElement("rect",{key:`${r}-${c}`,x:c+q,y:r+q,width:1,height:1,fill:"#000"}));return react_1.default.createElement("div",{className:`inline-flex items-center justify-center bg-white rounded-lg border border-slate-300 p-1 ${className}`},react_1.default.createElement("svg",{width:size,height:size,viewBox:`0 0 ${total} ${total}`,shapeRendering:"crispEdges",role:"img","aria-label":`QR ${String(value||'')}`},react_1.default.createElement("rect",{width:total,height:total,fill:"#fff"}),cells));};
 exports.QRCodeVisual=QRCodeVisual;
-const BarcodeAndQR = ({ value, secondaryValue, size = 'md', className = '' }) => {const qrSize=size==='sm'?62:size==='lg'?92:76;return react_1.default.createElement("div",{className:`grid grid-cols-[1fr_auto] gap-3 items-center w-full ${className}`,dir:"ltr"},react_1.default.createElement(exports.Barcode,{value,className:"min-w-0"}),react_1.default.createElement(exports.QRCodeVisual,{value:secondaryValue||value,size:qrSize}));};
+const BarcodeAndQR = ({ value, secondaryValue, size = 'md', className = '' }) => {const qrSize=size==='sm'?58:size==='lg'?86:68;return react_1.default.createElement("div",{className:`flex items-end justify-end gap-2 w-full ${className}`,dir:"rtl"},react_1.default.createElement("div",{className:"flex-1 flex justify-end"},react_1.default.createElement(exports.Barcode,{value,className:"min-w-0"})),react_1.default.createElement("div",{className:"shrink-0"},react_1.default.createElement(exports.QRCodeVisual,{value:secondaryValue||value,size:qrSize})));};
 exports.BarcodeAndQR=BarcodeAndQR;
 },
 "src/components/BottomNav.tsx": function(module, exports, require){
@@ -5685,7 +5699,7 @@ const CashFlowView = () => {
                         react_1.default.createElement(SmartSelect_1.SmartSelect, { required: true, value: expenseTypeId, onChange: e => setExpenseTypeId(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white" }, expenseTypes.map(t => (react_1.default.createElement("option", { key: t.id, value: t.id }, t.name)))))),
                     react_1.default.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
                         react_1.default.createElement("div", null,
-                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A (\u20AA) *"),
+                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A (شيكل) *"),
                             react_1.default.createElement("input", { type: "number", step: "any", required: true, placeholder: "0.00", value: amount, onChange: e => setAmount(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-base font-black text-amber-600 focus:outline-none focus:border-amber-500" })),
                         react_1.default.createElement("div", null,
                             react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u062A\u0627\u0631\u064A\u062E \u0627\u0644\u062D\u0631\u0643\u0629 *"),
@@ -6196,7 +6210,7 @@ const DashboardView = () => {
                         react_1.default.createElement("div", { className: "text-xs text-amber-100 font-semibold" }, "\u0645\u062A\u0648\u0633\u0637 \u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648 \u0627\u0644\u0641\u0639\u0644\u064A"),
                         react_1.default.createElement("div", { className: "text-2xl font-black text-white mt-1" },
                             averageCostPerKw.toFixed(2),
-                            " \u20AA / KW"),
+                            " شيكل / KW"),
                         react_1.default.createElement("div", { className: "text-[10px] text-amber-100 mt-0.5 font-medium" }, "= \u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u062A\u0643\u0644\u0641\u0629 \u00F7 \u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0627\u0633\u062A\u0647\u0644\u0627\u0643")))),
             react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-2xs flex flex-col justify-between" },
                 react_1.default.createElement("div", { className: "flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700" },
@@ -6711,7 +6725,7 @@ const FinancialAccountsView = () => {
                         react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0631\u0642\u0645 \u0627\u0644\u062D\u0633\u0627\u0628 / \u0627\u0644\u0645\u062D\u0641\u0638\u0629"),
                         react_1.default.createElement("input", { type: "text", value: accountNumber, onChange: e => setAccountNumber(e.target.value), placeholder: accountType === 'wallet' ? 'رقم المحفظة أو الهاتف' : 'رقم الحساب البنكي', className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" }))),
                     react_1.default.createElement("div", null,
-                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0631\u0635\u064A\u062F \u0627\u0644\u0627\u0641\u062A\u062A\u0627\u062D\u064A (\u20AA) *"),
+                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0631\u0635\u064A\u062F \u0627\u0644\u0627\u0641\u062A\u062A\u0627\u062D\u064A (شيكل) *"),
                         react_1.default.createElement("input", { type: "number", step: "any", required: true, value: initialBalance, onChange: e => setInitialBalance(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono" })),
                     react_1.default.createElement("div", null,
                         react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0648\u0635\u0641 \u0623\u0648 \u0645\u0644\u0627\u062D\u0638\u0629"),
@@ -6741,7 +6755,7 @@ const FinancialAccountsView = () => {
                             (0, helpers_1.formatCurrency)(a.currentBalance),
                             ")"))))),
                     react_1.default.createElement("div", null,
-                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0645\u0631\u0627\u062F \u062A\u062D\u0648\u064A\u0644\u0647 (\u20AA) *"),
+                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0645\u0631\u0627\u062F \u062A\u062D\u0648\u064A\u0644\u0647 (شيكل) *"),
                         react_1.default.createElement("input", { type: "number", step: "any", required: true, placeholder: "0.00", value: transferAmount, onChange: e => setTransferAmount(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-base font-bold" })),
                     react_1.default.createElement("div", null,
                         react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0633\u0628\u0628 \u0627\u0644\u062A\u062D\u0648\u064A\u0644 \u0623\u0648 \u0645\u0644\u0627\u062D\u0638\u0627\u062A"),
@@ -6798,10 +6812,14 @@ const Header = ({ onOpenSupport, onToggleMobileNav, mobileNavOpen }) => {
     var _a, _b, _c, _d;
     const { settings, currentUserRole, employees, activeEmployeeId, updateSettings } = (0, AppContext_1.useApp)();
     const [showNotifications, setShowNotifications] = (0, react_1.useState)(false);
+    const [syncState, setSyncState] = (0, react_1.useState)(() => window.MoldRuntime?.getSyncStatus?.() || { online: navigator.onLine !== false, pendingCount: 0, lastSync: null });
+    const [syncBusy, setSyncBusy] = (0, react_1.useState)(false);
     const activeEmployee = employees.find((e) => e.id === activeEmployeeId);
     const session = (_b = (_a = window.MoldRuntime) === null || _a === void 0 ? void 0 : _a.readSessionFast) === null || _b === void 0 ? void 0 : _b.call(_a);
     const accountName = ((_c = session === null || session === void 0 ? void 0 : session.account) === null || _c === void 0 ? void 0 : _c.name) || (currentUserRole === 'admin' ? settings.managerName : activeEmployee === null || activeEmployee === void 0 ? void 0 : activeEmployee.name) || 'المستخدم';
     const roleTitle = ((_d = session === null || session === void 0 ? void 0 : session.account) === null || _d === void 0 ? void 0 : _d.roleTitle) || (currentUserRole === 'admin' ? 'مدير الشركة' : (activeEmployee === null || activeEmployee === void 0 ? void 0 : activeEmployee.roleTitle) || (activeEmployee === null || activeEmployee === void 0 ? void 0 : activeEmployee.role) || 'موظف');
+    (0, react_1.useEffect)(() => { const fn = () => setSyncState(window.MoldRuntime?.getSyncStatus?.() || { online: navigator.onLine !== false, pendingCount: 0, lastSync: null }); window.addEventListener('masil-sync-state', fn); window.addEventListener('online', fn); window.addEventListener('offline', fn); fn(); return () => { window.removeEventListener('masil-sync-state', fn); window.removeEventListener('online', fn); window.removeEventListener('offline', fn); }; }, []);
+    const handleSyncClick = async () => { setSyncBusy(true); try { await window.MoldRuntime?.forceSync?.(); } catch (e) {} finally { setTimeout(() => setSyncBusy(false), 450); setSyncState(window.MoldRuntime?.getSyncStatus?.() || { online: navigator.onLine !== false, pendingCount: 0, lastSync: null }); } };
     return react_1.default.createElement("header", { className: "no-print sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 transition-colors" },
         react_1.default.createElement("div", { className: "max-w-7xl mx-auto px-3 sm:px-6 lg:px-8" },
             react_1.default.createElement("div", { className: "flex items-center justify-between h-16 gap-3" },
@@ -6815,6 +6833,9 @@ const Header = ({ onOpenSupport, onToggleMobileNav, mobileNavOpen }) => {
                         react_1.default.createElement(lucide_react_1.Printer, { className: "w-4 h-4" })),
                     react_1.default.createElement("button", { onClick: onOpenSupport, className: "relative p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800", title: "\u0627\u0644\u062F\u0639\u0645" },
                         react_1.default.createElement(lucide_react_1.MessageSquare, { className: "w-4 h-4 text-teal-600" })),
+                    react_1.default.createElement("button", { onClick: handleSyncClick, className: "relative p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800", title: "المزامنة" },
+                        react_1.default.createElement(lucide_react_1.RotateCcw, { className: `w-4 h-4 text-teal-600 ${syncBusy || syncState.syncing ? 'animate-spin' : ''}` }),
+                        syncState.pendingCount > 0 && react_1.default.createElement("span", { className: "absolute -top-1 -left-1 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-600 text-[10px] leading-[18px] text-center font-black text-white shadow-sm" }, syncState.pendingCount)),
                     react_1.default.createElement("button", { onClick: () => setShowNotifications(!showNotifications), className: "relative p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800", title: "\u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062A" },
                         react_1.default.createElement(lucide_react_1.Bell, { className: "w-4 h-4" }),
                         react_1.default.createElement("span", { className: "absolute top-1 right-1 w-2 h-2 bg-teal-500 rounded-full" })),
@@ -7333,19 +7354,19 @@ const InvoicesView = () => {
                             react_1.default.createElement("input", { type: "date", required: true, value: currentReadingDate, onChange: e => setCurrentReadingDate(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" }))),
                     react_1.default.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-3 gap-3" },
                         react_1.default.createElement("div", null,
-                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648 (\u20AA) *"),
+                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648 (شيكل) *"),
                             react_1.default.createElement("input", { type: "number", step: "any", value: pricePerKw, onChange: e => setPricePerKw(e.target.value), title: "يتم تحديد السعر من الإعدادات", className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white font-mono" })),
                         react_1.default.createElement("div", null,
-                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u062E\u0635\u0645 (\u20AA)"),
+                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u062E\u0635\u0645 (شيكل)"),
                             react_1.default.createElement("input", { type: "number", step: "any", value: discount, onChange: e => setDiscount(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono" })),
                         react_1.default.createElement("div", null,
-                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0645\u062F\u0641\u0648\u0639 \u062D\u0627\u0644\u064A\u0627\u064B (\u20AA)"),
+                            react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0645\u062F\u0641\u0648\u0639 \u062D\u0627\u0644\u064A\u0627\u064B (شيكل)"),
                             react_1.default.createElement("input", { type: "number", step: "any", value: amountPaid, onChange: e => setAmountPaid(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono" }))),
                     amountPaidNum > 0 && react_1.default.createElement("div", { className: "p-3 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/20" },
                         react_1.default.createElement("label", { className: "block font-black text-emerald-800 dark:text-emerald-300 mb-1.5" }, "إيداع المبلغ المدفوع في الحساب *"),
                         react_1.default.createElement(SmartSelect_1.SmartSelect, { required: true, value: paymentAccountId, onChange: e => setPaymentAccountId(e.target.value), className: "w-full p-2.5 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900" },
                             react_1.default.createElement("option", { value: "" }, "اختر الحساب المالي..."),
-                            financialAccounts.map(a => react_1.default.createElement("option", { key: a.id, value: a.id }, `${a.name} • ${a.type === 'cash' ? 'كاش' : a.type === 'wallet' ? 'محفظة' : 'بنكي'} • ${Number(a.currentBalance||0).toFixed(2)} ₪`)))),
+                            financialAccounts.map(a => react_1.default.createElement("option", { key: a.id, value: a.id }, `${a.name} • ${a.type === 'cash' ? 'كاش' : a.type === 'wallet' ? 'محفظة' : 'بنكي'} • ${Number(a.currentBalance||0).toFixed(2)} شيكل`)))),
                     react_1.default.createElement("div", { className: "p-4 rounded-xl bg-gradient-to-br from-amber-500/10 to-orange-500/10 border border-amber-300 dark:border-amber-800 space-y-2" },
                         react_1.default.createElement("div", { className: "flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200" },
                             react_1.default.createElement("span", null, "\u0645\u0639\u0627\u064A\u0646\u0629 \u062D\u064A\u0629 \u0644\u0627\u062D\u062A\u0633\u0627\u0628 \u0627\u0644\u0641\u0627\u062A\u0648\u0631\u0629"),
@@ -7471,7 +7492,7 @@ const InvoicesView = () => {
                                             " KW"),
                                         react_1.default.createElement("td", { className: "py-1.5 text-left" },
                                             viewInvoice.pricePerKw,
-                                            " \u20AA / KW")))),
+                                            " شيكل / KW")))),
                             settings.showInvoiceTotals !== false && react_1.default.createElement("div", { className: "space-y-1.5 pt-2 border-t-2 border-dashed border-slate-300" },
                                 react_1.default.createElement("div", { className: "flex justify-between font-semibold" },
                                     react_1.default.createElement("span", null, "\u0625\u062C\u0645\u0627\u0644\u064A \u0642\u064A\u0645\u0629 \u0627\u0644\u0627\u0633\u062A\u0647\u0644\u0627\u0643:"),
@@ -7776,7 +7797,7 @@ const MetersView = () => {
             notes:'فاتورة تلقائية من تسجيل قراءة العداد',photoUrl:'',subscriptionDays:30,daysUsed:30,daysRemaining:0
         });
         if (!invoice) return;
-        window.asilToast?.(`تم تسجيل القراءة وإصدار فاتورة بقيمة ${total.toFixed(2)} ₪ كدين على المشترك`,'success');
+        window.asilToast?.(`تم تسجيل القراءة وإصدار فاتورة بقيمة ${total.toFixed(2)} شيكل كدين على المشترك`,'success');
         setReadingModalMeter(null); setNewReadingVal('');
     };
     const handleAddZone = (e) => {
@@ -8327,7 +8348,7 @@ const SmartSelect_1 = require("./SmartSelect");
 const helpers_1 = require("../utils/helpers");
 const QuickActionModalDialog = () => {
     var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
-    const { quickActionModal, setQuickActionModal, subscribers, meters, panels, zones, financialAccounts, expenseTypes, employees, settings, addSubscriber, addMeter, addInvoice, addTransaction, addTask } = (0, AppContext_1.useApp)();
+    const { quickActionModal, setQuickActionModal, subscribers, meters, panels, zones, financialAccounts, expenseTypes, employees, settings, addSubscriber, addMeter, addInvoice, addTransaction, addTask, selectedSubscriberForDetail } = (0, AppContext_1.useApp)();
     const today = (0, helpers_1.getTodayDateString)();
     // 1. Add Subscriber State
     const [subName, setSubName] = (0, react_1.useState)('');
@@ -8359,6 +8380,15 @@ const QuickActionModalDialog = () => {
     const [txAccountId, setTxAccountId] = (0, react_1.useState)(((_g = financialAccounts[0]) === null || _g === void 0 ? void 0 : _g.id) || '');
     const [txAmount, setTxAmount] = (0, react_1.useState)('');
     const [txNotes, setTxNotes] = (0, react_1.useState)('');
+    (0, react_1.useEffect)(() => {
+        if (!quickActionModal || !selectedSubscriberForDetail?.id) return;
+        if (quickActionModal === 'add-deposit' || quickActionModal === 'send-payment') setTxSubId(selectedSubscriberForDetail.id);
+        if (quickActionModal === 'add-invoice') {
+            setInvSubId(selectedSubscriberForDetail.id);
+            const linkedMeter = meters.find(m => m.subscriberId === selectedSubscriberForDetail.id);
+            if (linkedMeter) { setInvMeterId(linkedMeter.id); setPrevReading(String(linkedMeter.lastReading ?? linkedMeter.initialReading ?? 0)); setCurrReading(String(linkedMeter.lastReading ?? linkedMeter.initialReading ?? 0)); }
+        }
+    }, [quickActionModal, selectedSubscriberForDetail?.id]);
     // 5. Transfer Funds State
     const [transferFromId, setTransferFromId] = (0, react_1.useState)(((_h = financialAccounts[0]) === null || _h === void 0 ? void 0 : _h.id) || '');
     const [transferToId, setTransferToId] = (0, react_1.useState)(((_j = financialAccounts[1]) === null || _j === void 0 ? void 0 : _j.id) || ((_k = financialAccounts[0]) === null || _k === void 0 ? void 0 : _k.id) || '');
@@ -8422,7 +8452,7 @@ const QuickActionModalDialog = () => {
         e.preventDefault();
         const prev = parseFloat(prevReading) || 0;
         const curr = parseFloat(currReading) || 0;
-        const pKw = Number(settings.defaultPricePerKw) || 0;
+        const pKw = Math.max(0, parseFloat(priceKw) || Number(settings.defaultPricePerKw) || 0);
         const disc = parseFloat(invDiscount) || 0;
         if (curr < prev) { window.asilToast?.('القراءة الحالية لا يمكن أن تقل عن السابقة.','error'); return; }
         const kw = Math.max(0, curr - prev);
@@ -8846,24 +8876,19 @@ const ReportsView = () => {
                     react_1.default.createElement(lucide_react_1.BarChart3, { className: "w-6 h-6 text-teal-600 dark:text-teal-400" }),
                     react_1.default.createElement("span", null, "\u0645\u0631\u0643\u0632 \u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631 \u0648\u0627\u0644\u0643\u0634\u0648\u0641\u0627\u062A \u0627\u0644\u0631\u0633\u0645\u064A\u0629")),
                 react_1.default.createElement("p", { className: "text-xs sm:text-sm text-slate-500 dark:text-slate-400" }, "\u0643\u0634\u0648\u0641\u0627\u062A \u0634\u0627\u0645\u0644\u0629\u060C \u062A\u0642\u0627\u0631\u064A\u0631 \u0645\u0627\u0644\u064A\u0629\u060C \u0627\u0633\u062A\u0647\u0644\u0627\u0643 \u0627\u0644\u0645\u0634\u062A\u0631\u0643\u064A\u0646\u060C \u0648\u062A\u062D\u0645\u064A\u0644 PDF \u0648\u0635\u0648\u0631 \u0648\u0637\u0628\u0627\u0639\u0629 \u0641\u0648\u0631\u064A\u0629")),
-            react_1.default.createElement("div", { className: "flex items-center gap-2 flex-wrap" },
-                react_1.default.createElement("button", { onClick: async () => {
-                        setIsExporting(true);
-                        await (0, exportUtils_1.downloadElementAsImage)('printable-report', `تقرير-${activeReportTab}-${today}`);
-                        setIsExporting(false);
-                    }, disabled: isExporting, className: "flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold hover:bg-slate-50 shadow-2xs transition-all" },
-                    react_1.default.createElement(lucide_react_1.Download, { className: "w-3.5 h-3.5 text-teal-600" }),
-                    react_1.default.createElement("span", null, "\u062A\u062D\u0645\u064A\u0644 \u0643\u0635\u0648\u0631\u0629")),
-                react_1.default.createElement("button", { onClick: async () => {
-                        setIsExporting(true);
-                        await (0, exportUtils_1.downloadElementAsPdf)('printable-report', `تقرير-${activeReportTab}-${today}`);
-                        setIsExporting(false);
-                    }, disabled: isExporting, className: "flex items-center gap-1.5 px-3 py-2 rounded-xl bg-teal-50 dark:bg-teal-950/50 text-teal-700 dark:text-teal-300 text-xs font-bold hover:bg-teal-100 transition-all border border-teal-200 dark:border-teal-800" },
-                    react_1.default.createElement(lucide_react_1.FileText, { className: "w-3.5 h-3.5" }),
-                    react_1.default.createElement("span", null, "\u062A\u062D\u0645\u064A\u0644 PDF")),
-                react_1.default.createElement("button", { onClick: helpers_1.triggerPrint, className: "flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs sm:text-sm font-bold shadow-md shadow-teal-600/20 transition-all" },
+            react_1.default.createElement("div", { className: "grid grid-cols-2 sm:flex items-stretch gap-2" },
+                react_1.default.createElement("button", { onClick: async () => { setIsExporting(true); try { await (0, exportUtils_1.downloadElementAsPdf)('printable-report', `تقرير-${activeReportTab}-${today}`, 'p'); } finally { setIsExporting(false); } }, disabled: isExporting, className: "min-w-[128px] flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black shadow-sm disabled:opacity-60" },
+                    react_1.default.createElement(lucide_react_1.FileText, { className: `w-4 h-4 ${isExporting ? 'animate-pulse' : ''}` }),
+                    react_1.default.createElement("span", null, "PDF A4 عمودي")),
+                react_1.default.createElement("button", { onClick: async () => { setIsExporting(true); try { await (0, exportUtils_1.downloadElementAsPdf)('printable-report', `تقرير-${activeReportTab}-${today}-افقي`, 'l'); } finally { setIsExporting(false); } }, disabled: isExporting, className: "min-w-[128px] flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 text-xs font-black disabled:opacity-60" },
+                    react_1.default.createElement(lucide_react_1.FileSpreadsheet, { className: "w-4 h-4" }),
+                    react_1.default.createElement("span", null, "PDF A4 أفقي")),
+                react_1.default.createElement("button", { onClick: async () => { setIsExporting(true); try { await (0, exportUtils_1.downloadElementAsImage)('printable-report', `تقرير-${activeReportTab}-${today}`); } finally { setIsExporting(false); } }, disabled: isExporting, className: "flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold" },
+                    react_1.default.createElement(lucide_react_1.Download, { className: "w-4 h-4 text-teal-600" }),
+                    react_1.default.createElement("span", null, "صورة")),
+                react_1.default.createElement("button", { onClick: helpers_1.triggerPrint, className: "flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold" },
                     react_1.default.createElement(lucide_react_1.Printer, { className: "w-4 h-4" }),
-                    react_1.default.createElement("span", null, "\u0637\u0628\u0627\u0639\u0629 \u0627\u0644\u062A\u0642\u0631\u064A\u0631")))),
+                    react_1.default.createElement("span", null, "طباعة")))),
         react_1.default.createElement("div", { className: "no-print flex items-center gap-2 overflow-x-auto bg-white dark:bg-slate-800 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs" }, [
             { id: 'comprehensive', label: 'التقرير الشامل التراكمي', icon: lucide_react_1.FileSpreadsheet },
             { id: 'financial', label: 'التقرير المالي العام', icon: lucide_react_1.DollarSign },
@@ -9087,7 +9112,7 @@ const ReportsView = () => {
                                 "\u0639\u0644\u064A\u0643 ",
                                 (0, helpers_1.formatCurrency)(summary.amountDueBySubscriber))) : summary.amountDueToSubscriber > 0 ? (react_1.default.createElement("span", { className: "text-emerald-600" },
                                 "\u0644\u0643 ",
-                                (0, helpers_1.formatCurrency)(summary.amountDueToSubscriber))) : (react_1.default.createElement("span", { className: "text-slate-400" }, "0.0 \u20AA"))))))))))),
+                                (0, helpers_1.formatCurrency)(summary.amountDueToSubscriber))) : (react_1.default.createElement("span", { className: "text-slate-400" }, "0.0 شيكل"))))))))))),
             activeReportTab === 'consumption' && (react_1.default.createElement("div", { className: "space-y-4" },
                 react_1.default.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-3 gap-3" },
                     react_1.default.createElement("div", { className: "p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900" },
@@ -9102,7 +9127,7 @@ const ReportsView = () => {
                         react_1.default.createElement("span", { className: "text-xs text-slate-500 block" }, "\u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648 \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A"),
                         react_1.default.createElement("span", { className: "text-xl font-black text-slate-900 dark:text-white font-mono mt-1 block" },
                             settings.defaultPricePerKw,
-                            " \u20AA / KW"))),
+                            " شيكل / KW"))),
                 react_1.default.createElement("div", null,
                     react_1.default.createElement("h3", { className: "font-extrabold text-sm text-slate-900 dark:text-white mb-2" }, "\u0642\u0627\u0626\u0645\u0629 \u0642\u0631\u0627\u0621\u0627\u062A \u0627\u0644\u0639\u062F\u0627\u062F\u0627\u062A"),
                     react_1.default.createElement("table", { className: "w-full text-xs text-right border-collapse" },
@@ -9252,7 +9277,7 @@ const initialData_1 = require("../data/initialData");
 const ImageUpload_1 = require("./ImageUpload");
 const SettingsView = () => {
     var _a, _b;
-    const { settings, updateSettings, generators, addGenerator, updateGenerator, deleteGenerator, addFuelToGenerator, recordFuelConsumption, financialAccounts, zones, addZone, panels, addPanel, clearAllData, seedSampleData, resetToDefaultData } = (0, AppContext_1.useApp)();
+    const { settings, updateSettings, generators, addGenerator, updateGenerator, deleteGenerator, addFuelToGenerator, recordFuelConsumption, financialAccounts, zones, addZone, panels, addPanel, clearAllData, seedSampleData, resetToDefaultData, timeline } = (0, AppContext_1.useApp)();
     const [activeTab, setActiveTab] = (0, react_1.useState)('general');
     const [saveSuccess, setSaveSuccess] = (0, react_1.useState)(false);
     const [actionSuccessMsg, setActionSuccessMsg] = (0, react_1.useState)(null);
@@ -9278,6 +9303,7 @@ const SettingsView = () => {
     const [fuelLiters, setFuelLiters] = (0, react_1.useState)('');
     const [fuelPricePerLiter, setFuelPricePerLiter] = (0, react_1.useState)('');
     const [fuelAccountId, setFuelAccountId] = (0, react_1.useState)(((_a = financialAccounts[0]) === null || _a === void 0 ? void 0 : _a.id) || '');
+    const [generatorLogFor, setGeneratorLogFor] = (0, react_1.useState)(null);
     const [fuelNotes, setFuelNotes] = (0, react_1.useState)('');
     const [consumptionGenerator, setConsumptionGenerator] = (0, react_1.useState)(null);
     const [runHours, setRunHours] = (0, react_1.useState)('1');
@@ -9355,8 +9381,7 @@ const SettingsView = () => {
         if (!Number.isFinite(liters) || liters <= 0)
             return;
         const price = parseFloat(fuelPricePerLiter) || 0;
-        if (price > 0 && !fuelAccountId) { window.asilToast?.('اختر الحساب الذي ستدفع منه تكلفة الوقود.','error'); return; }
-        const ok = addFuelToGenerator(fuelGenerator.id, liters, price, fuelAccountId || undefined, fuelNotes.trim());
+        const ok = addFuelToGenerator(fuelGenerator.id, liters, price, undefined, fuelNotes.trim());
         if (!ok) return;
         setFuelGenerator(null);
         setFuelLiters('');
@@ -9404,6 +9429,7 @@ const SettingsView = () => {
     const fuelProjected = fuelGenerator ? Math.min(Number(fuelGenerator.fuelCapacityLiters||0), Number(fuelGenerator.currentFuelLiters||0)+fuelActual) : 0;
     const fuelProjectedPct = fuelGenerator && Number(fuelGenerator.fuelCapacityLiters||0)>0 ? Math.min(100,(fuelProjected/Number(fuelGenerator.fuelCapacityLiters))*100) : 0;
     const fuelTotalCost = fuelActual * fuelUnitPrice;
+    const generatorLogEntries = generatorLogFor ? (timeline || []).filter(item => (item?.metadata?.generatorId && item.metadata.generatorId === generatorLogFor.id) || String(item?.details || '').includes(String(generatorLogFor.name || ''))).slice(0, 80) : [];
     const TAGS_BY_TEMPLATE = {
         summaryTemplate: [
             'اسم_المشترك', 'اسم_الشبكة', 'اسم_المرسل', 'اليوم', 'التاريخ', 'اسم_العداد',
@@ -9473,7 +9499,7 @@ const SettingsView = () => {
                 react_1.default.createElement(ImageUpload_1.ImageUpload, { value: settings.storeLogoUrl || '', onChange: storeLogoUrl => updateSettings({ storeLogoUrl }), label: "صورة / شعار المحل", hint: "اضغط لاختيار شعار المحل من الجهاز" }),
                 react_1.default.createElement("div", { className: "grid grid-cols-2 gap-3" },
                     react_1.default.createElement("div", null,
-                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648 \u0648\u0627\u062A \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A (\u20AA) *"),
+                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648 \u0648\u0627\u062A \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A (شيكل) *"),
                         react_1.default.createElement("input", { type: "number", step: "any", required: true, value: defaultPricePerKw, onChange: e => setDefaultPricePerKw(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-mono font-bold" })),
                     react_1.default.createElement("div", null,
                         react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0631\u0645\u0632 \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u0639\u062A\u0645\u062F\u0629 *"),
@@ -9532,13 +9558,16 @@ const SettingsView = () => {
                             react_1.default.createElement("span", { className: "font-bold font-mono" },
                                 gen.operatingHours,
                                 " \u0633\u0627\u0639\u0629"))),
-                    react_1.default.createElement("div", { className: "grid grid-cols-2 gap-2 pt-1" },
-                        react_1.default.createElement("button", { type: "button", onClick: () => { var _a; setFuelGenerator(gen); setFuelLiters(''); setFuelPricePerLiter(''); setFuelAccountId(((_a = financialAccounts[0]) === null || _a === void 0 ? void 0 : _a.id) || ''); }, className: "flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black shadow-sm" },
+                    react_1.default.createElement("div", { className: "grid grid-cols-3 gap-2 pt-1" },
+                        react_1.default.createElement("button", { type: "button", onClick: () => { setFuelGenerator(gen); setFuelLiters(''); setFuelPricePerLiter(''); }, className: "flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black shadow-sm" },
                             react_1.default.createElement(lucide_react_1.Fuel, { className: "w-4 h-4" }),
                             "\u0625\u0636\u0627\u0641\u0629 \u0648\u0642\u0648\u062F"),
                         react_1.default.createElement("button", { type: "button", onClick: () => { setConsumptionGenerator(gen); setRunHours('1'); setActualConsumedLiters(''); }, className: "flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 text-white text-xs font-black" },
                             react_1.default.createElement(lucide_react_1.Gauge, { className: "w-4 h-4" }),
-                            "\u062A\u0633\u062C\u064A\u0644 \u0627\u0633\u062A\u0647\u0644\u0627\u0643"))));
+                            "\u062A\u0633\u062C\u064A\u0644 \u0627\u0633\u062A\u0647\u0644\u0627\u0643"),
+                        react_1.default.createElement("button", { type: "button", onClick: () => setGeneratorLogFor(gen), className: "flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-black" },
+                            react_1.default.createElement(lucide_react_1.FileText, { className: "w-4 h-4" }),
+                            "\u0627\u0644\u0633\u062C\u0644"))));
             })))),
         activeTab === 'templates' && (react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl p-5 sm:p-6 border border-slate-200 dark:border-slate-700 shadow-2xs space-y-4" },
             react_1.default.createElement("div", { className: "flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-700" },
@@ -9602,27 +9631,28 @@ const SettingsView = () => {
             react_1.default.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-3 gap-3" },
                 react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700" },
                     react_1.default.createElement("div", { className: "flex items-center gap-2 text-xs font-black" }, syncState.online ? react_1.default.createElement(lucide_react_1.Radio, { className: "w-4 h-4 text-emerald-600" }) : react_1.default.createElement(lucide_react_1.AlertCircle, { className: "w-4 h-4 text-amber-600" }), syncState.online ? "متصل بالإنترنت" : "وضع دون إنترنت"),
-                    react_1.default.createElement("p", { className: "text-[10px] text-slate-400 mt-1" }, syncState.online ? "التغييرات تتجمع ثم تُرسل دفعة واحدة لتقليل القراءة والكتابة." : "التغييرات محفوظة محلياً وستُرسل تلقائياً عند عودة الاتصال.")),
+                    react_1.default.createElement("p", { className: "text-[10px] text-slate-400 mt-1" }, syncState.online ? "التغييرات تظهر فوراً على الجهاز ثم تتم مزامنتها تلقائياً مع الأجهزة الأخرى." : "التغييرات محفوظة محلياً وستُرسل تلقائياً عند عودة الاتصال.")),
                 react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700" },
                     react_1.default.createElement("div", { className: "text-[10px] text-slate-400" }, "العمليات المعلقة"),
-                    react_1.default.createElement("div", { className: `text-2xl font-black mt-1 ${syncState.pendingCount ? 'text-amber-600' : 'text-emerald-600'}` }, syncState.pendingCount || 0)),
+                    react_1.default.createElement("div", { className: "text-2xl font-black mt-1 text-emerald-600" }, syncState.pendingCount || 0)),
                 react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700" },
                     react_1.default.createElement("div", { className: "text-[10px] text-slate-400" }, "آخر مزامنة ناجحة"),
                     react_1.default.createElement("div", { className: "text-xs font-black mt-1" }, syncState.lastSync ? new Date(syncState.lastSync).toLocaleString('ar-EG') : "لم تتم بعد"))),
             react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-2xs" },
                 react_1.default.createElement("div", { className: "flex items-start gap-3 mb-4" },
                     react_1.default.createElement("div", { className: "w-10 h-10 rounded-xl bg-teal-50 dark:bg-teal-950/40 text-teal-700 flex items-center justify-center" }, react_1.default.createElement(lucide_react_1.RotateCcw, { className: `w-5 h-5 ${syncBusy ? 'animate-spin' : ''}` })),
-                    react_1.default.createElement("div", null, react_1.default.createElement("h3", { className: "font-black text-sm" }, "المزامنة الذكية"), react_1.default.createElement("p", { className: "text-[11px] text-slate-500 mt-1 leading-5" }, "يحفظ النظام آخر نسخة محلياً ويجمع التغييرات المتتابعة في عملية مزامنة واحدة، بدل تنفيذ قراءة أو كتابة لكل تغيير صغير."))),
+                    react_1.default.createElement("div", null, react_1.default.createElement("h3", { className: "font-black text-sm" }, "المزامنة الذكية"), react_1.default.createElement("p", { className: "text-[11px] text-slate-500 mt-1 leading-5" }, "يحفظ النظام التغيير محلياً فوراً، ثم يرسله تلقائياً ويستقبل تحديثات الأجهزة الأخرى أثناء بقاء الشاشة مفتوحة."))),
                 react_1.default.createElement("button", { type: "button", disabled: syncBusy || !syncState.online, onClick: handleForceSync, className: "w-full sm:w-auto px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-black flex items-center justify-center gap-2" }, react_1.default.createElement(lucide_react_1.Upload, { className: "w-4 h-4" }), "مزامنة الآن")),
             react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-2xs space-y-4" },
                 react_1.default.createElement("div", null, react_1.default.createElement("h3", { className: "font-black text-sm" }, "عناصر الفاتورة والطباعة"), react_1.default.createElement("p", { className: "text-[11px] text-slate-500 mt-1" }, "اختر العناصر التي تريد ظهورها في عرض وطباعة وتنزيل الفاتورة.")),
                 react_1.default.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-2" }, [
                     ['showInvoiceLogo','الشعار'],['showInvoiceName','اسم المحل / الشبكة'],['showInvoiceSubtitle','وصف المحل'],['showInvoiceNumberDate','رقم وتاريخ الفاتورة'],['showInvoiceSubscriber','بيانات المشترك'],['showInvoiceReadings','القراءات والاستهلاك'],['showInvoiceTotals','المبالغ والإجماليات'],['showInvoiceMedia','زر عرض الوسائط'],['showInvoiceBarcode','الباركود و QR'],['showInvoiceFooter','تذييل الفاتورة']
                 ].map(([key,label]) => react_1.default.createElement("label", { key, className: "flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 cursor-pointer" }, react_1.default.createElement("span", { className: "text-xs font-bold" }, label), react_1.default.createElement("input", { type: "checkbox", checked: settings[key] !== false, onChange: e => updateSettings({ [key]: e.target.checked }), className: "w-4 h-4 accent-teal-600" })))),
-                react_1.default.createElement("div", { className: "pt-2 border-t border-slate-100 dark:border-slate-800" },
-                    react_1.default.createElement("label", { className: "block text-xs font-black mb-1.5" }, "رابط خدمة تخزين الصور"),
-                    react_1.default.createElement("div", { className: "flex flex-col sm:flex-row gap-2" }, react_1.default.createElement("input", { type: "url", dir: "ltr", value: mediaUploadEndpoint, onChange: e => setMediaUploadEndpoint(e.target.value), placeholder: "https://your-media-worker.workers.dev", className: "flex-1 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs" }), react_1.default.createElement("button", { type: "button", onClick: () => { updateSettings({ mediaUploadEndpoint: mediaUploadEndpoint.trim() }); window.MoldMedia?.syncPending?.(); window.asilToast?.('تم حفظ إعداد خدمة الصور.','success'); }, className: "px-4 py-2.5 rounded-xl bg-slate-800 text-white text-xs font-black" }, "حفظ")),
-                    react_1.default.createElement("p", { className: "text-[10px] text-slate-400 mt-1.5" }, "الصور تُضغط تلقائياً قبل الرفع، وTurso يحتفظ بالرابط فقط.")),
+                react_1.default.createElement("div", { className: "pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3" },
+                    react_1.default.createElement("div", null,
+                        react_1.default.createElement("div", { className: "text-xs font-black" }, "حفظ الوسائط تلقائياً"),
+                        react_1.default.createElement("p", { className: "text-[10px] text-slate-400 mt-1" }, "الصور تُضغط تلقائياً وتُحفظ محلياً عند انقطاع الإنترنت ثم تُرفع وتُربط بالحركة تلقائياً عند عودة الاتصال.")),
+                    react_1.default.createElement("div", { className: "w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 flex items-center justify-center" }, react_1.default.createElement(lucide_react_1.Image, { className: "w-4 h-4" }))),
                 react_1.default.createElement("button", { type: "button", onClick: () => window.MoldPWA?.install?.(), className: "w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center justify-center gap-2" }, react_1.default.createElement(lucide_react_1.Download, { className: "w-4 h-4" }), "تثبيت التطبيق")),
             react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-2xs" },
                 react_1.default.createElement("h3", { className: "font-black text-sm flex items-center gap-2" }, react_1.default.createElement(lucide_react_1.Save, { className: "w-5 h-5 text-teal-600" }), "النسخة الاحتياطية"),
@@ -9662,6 +9692,18 @@ const SettingsView = () => {
                             react_1.default.createElement("h4", { className: "font-extrabold text-sm text-slate-900 dark:text-white" }, "\u0625\u0639\u0627\u062F\u0629 \u0636\u0628\u0637 \u0627\u0644\u0645\u0635\u0646\u0639 (Factory Reset)"),
                             react_1.default.createElement("p", { className: "text-xs text-slate-500 dark:text-slate-400 leading-relaxed" }, "\u0625\u0639\u0627\u062F\u0629 \u0636\u0628\u0637 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A\u060C \u0627\u0644\u0623\u0633\u0639\u0627\u0631\u060C \u0627\u0644\u0645\u0646\u0627\u0637\u0642\u060C \u0648\u0642\u0648\u0627\u0644\u0628 \u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0625\u0644\u0649 \u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u0645\u0635\u0646\u0639\u064A \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A.")),
                         react_1.default.createElement("button", { onClick: () => window.asilConfirm?.('هل تريد استعادة جميع الإعدادات الأولية وضبط المصنع؟', () => { resetToDefaultData(); setActionSuccessMsg('تمت استعادة كافة إعدادات المصنع بنجاح!'); setTimeout(() => setActionSuccessMsg(null), 5000); }, {title:'ضبط المصنع',confirmText:'استعادة'}), className: "w-full py-2.5 px-4 rounded-xl bg-slate-700 hover:bg-slate-800 text-white font-bold text-xs transition-colors" }, "\u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0636\u0628\u0637 \u0627\u0644\u0645\u0635\u0646\u0639 \u0628\u0627\u0644\u0643\u0627\u0645\u0644")))))),
+        generatorLogFor && (react_1.default.createElement("div", { className: "fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in" },
+            react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 rounded-2xl max-w-2xl w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 max-h-[82vh] overflow-hidden" },
+                react_1.default.createElement("div", { className: "flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800" },
+                    react_1.default.createElement("div", null,
+                        react_1.default.createElement("h3", { className: "font-black text-base text-slate-900 dark:text-white" }, "سجل عمليات المولد"),
+                        react_1.default.createElement("p", { className: "text-[11px] text-slate-400" }, generatorLogFor.name || '')),
+                    react_1.default.createElement("button", { onClick: () => setGeneratorLogFor(null), className: "text-slate-400 text-xl" }, "×")),
+                react_1.default.createElement("div", { className: "mt-4 space-y-2 overflow-y-auto max-h-[62vh] pr-1" }, generatorLogEntries.length ? generatorLogEntries.map(item => react_1.default.createElement("div", { key: item.id, className: "p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/40" },
+                    react_1.default.createElement("div", { className: "flex items-center justify-between gap-2" },
+                        react_1.default.createElement("div", { className: "font-black text-xs text-slate-900 dark:text-white" }, item.title || item.action || 'عملية'),
+                        react_1.default.createElement("div", { className: "text-[10px] text-slate-400" }, item.timestamp || '')),
+                    react_1.default.createElement("div", { className: "text-[11px] text-slate-600 dark:text-slate-300 mt-1 leading-6" }, item.details || ''))) : react_1.default.createElement("div", { className: "py-10 text-center text-xs text-slate-500" }, "لا توجد عمليات مسجلة لهذا المولد حتى الآن."))))),
         fuelGenerator && (react_1.default.createElement("div", { className: "fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in" },
             react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800" },
                 react_1.default.createElement("div", { className: "flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800" },
@@ -9681,7 +9723,7 @@ const SettingsView = () => {
                     react_1.default.createElement("div", { className: "grid grid-cols-3 gap-2 mt-3 text-center" },
                         react_1.default.createElement("div", { className: "p-2 rounded-xl bg-white/70 dark:bg-slate-900/50" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "المتاح"), react_1.default.createElement("b", null, `${fuelRoom.toFixed(1)} L`)),
                         react_1.default.createElement("div", { className: "p-2 rounded-xl bg-white/70 dark:bg-slate-900/50" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "سيضاف"), react_1.default.createElement("b", null, `${fuelActual.toFixed(1)} L`)),
-                        react_1.default.createElement("div", { className: "p-2 rounded-xl bg-white/70 dark:bg-slate-900/50" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "التكلفة"), react_1.default.createElement("b", null, `${fuelTotalCost.toFixed(2)} ₪`)))),
+                        react_1.default.createElement("div", { className: "p-2 rounded-xl bg-white/70 dark:bg-slate-900/50" }, react_1.default.createElement("div", { className: "text-[10px] text-slate-500" }, "التكلفة"), react_1.default.createElement("b", null, `${fuelTotalCost.toFixed(2)} شيكل`)))),
                 react_1.default.createElement("form", { onSubmit: handleAddFuel, className: "space-y-4 mt-4 text-xs" },
                     react_1.default.createElement("div", { className: "grid grid-cols-2 gap-3" },
                         react_1.default.createElement("div", null,
@@ -9690,14 +9732,7 @@ const SettingsView = () => {
                         react_1.default.createElement("div", null,
                             react_1.default.createElement("label", { className: "block font-bold mb-1" }, "\u0633\u0639\u0631 \u0627\u0644\u0644\u062A\u0631 (\u0627\u062E\u062A\u064A\u0627\u0631\u064A)"),
                             react_1.default.createElement("input", { type: "number", min: "0", step: "any", value: fuelPricePerLiter, onChange: e => setFuelPricePerLiter(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" }))),
-                    financialAccounts.length > 0 && react_1.default.createElement("div", null,
-                        react_1.default.createElement("label", { className: "block font-bold mb-1" }, "\u062D\u0633\u0627\u0628 \u0627\u0644\u062F\u0641\u0639"),
-                        react_1.default.createElement(SmartSelect_1.SmartSelect, { value: fuelAccountId, onChange: e => setFuelAccountId(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" }, financialAccounts.map(a => react_1.default.createElement("option", { key: a.id, value: a.id },
-                            a.name,
-                            " \u2022 ",
-                            a.currentBalance.toFixed(2),
-                            " \u20AA"))),
-                        react_1.default.createElement("p", { className: "text-[10px] text-slate-400 mt-1" }, "\u0639\u0646\u062F \u0625\u062F\u062E\u0627\u0644 \u0633\u0639\u0631 \u0627\u0644\u0644\u062A\u0631 \u0633\u064A\u062A\u0645 \u062A\u0633\u062C\u064A\u0644 \u0645\u0635\u0631\u0648\u0641 \u0627\u0644\u0648\u0642\u0648\u062F \u0648\u062E\u0635\u0645\u0647 \u0645\u0646 \u0647\u0630\u0627 \u0627\u0644\u062D\u0633\u0627\u0628.")),
+
                     react_1.default.createElement("div", null,
                         react_1.default.createElement("label", { className: "block font-bold mb-1" }, "\u0645\u0644\u0627\u062D\u0638\u0627\u062A"),
                         react_1.default.createElement("input", { value: fuelNotes, onChange: e => setFuelNotes(e.target.value), placeholder: "\u0631\u0642\u0645 \u0641\u0627\u062A\u0648\u0631\u0629 \u0627\u0644\u0648\u0642\u0648\u062F \u0623\u0648 \u0627\u0633\u0645 \u0627\u0644\u0645\u0648\u0631\u062F...", className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" })),
@@ -9955,7 +9990,7 @@ const SubscriberPortalView = () => {
                     ? (0, helpers_1.formatCurrency)(summary.amountDueBySubscriber)
                     : summary.amountDueToSubscriber > 0
                         ? (0, helpers_1.formatCurrency)(summary.amountDueToSubscriber)
-                        : '0.0 ₪'))),
+                        : '0.0 شيكل'))),
         react_1.default.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" },
             react_1.default.createElement("div", { className: "p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xs" },
                 react_1.default.createElement("div", { className: "text-xs text-slate-400 flex items-center gap-1" },
@@ -9988,7 +10023,7 @@ const SubscriberPortalView = () => {
                     react_1.default.createElement("span", null, "\u0645\u062A\u0648\u0633\u0637 \u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648")),
                 react_1.default.createElement("div", { className: "text-lg sm:text-xl font-black text-slate-900 dark:text-white mt-1.5 font-mono" },
                     summary.averagePricePerKw.toFixed(1),
-                    " \u20AA / KW"),
+                    " شيكل / KW"),
                 react_1.default.createElement("div", { className: "text-[10px] text-slate-400 mt-1" }, "\u062A\u0633\u0639\u064A\u0631\u0629 \u0645\u0648\u062D\u062F\u0629 \u0645\u0639\u062A\u0645\u062F\u0629"))),
         react_1.default.createElement("div", { className: "bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs space-y-4" },
             react_1.default.createElement("h3", { className: "font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2" },
@@ -10331,7 +10366,7 @@ const SubscribersView = () => {
                             react_1.default.createElement("div", { className: "text-[10px] font-bold" }, "\u0631\u0635\u064A\u062F \u062F\u0627\u0626\u0646 \u0644\u0647"),
                             react_1.default.createElement("div", { className: "font-black text-xs sm:text-sm" }, (0, helpers_1.formatCurrency)(summary.amountDueToSubscriber)))) : (react_1.default.createElement("div", { className: "px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-right" },
                             react_1.default.createElement("div", { className: "text-[10px] font-bold" }, "\u0645\u0633\u062F\u062F \u0628\u0627\u0644\u0643\u0627\u0645\u0644"),
-                            react_1.default.createElement("div", { className: "font-black text-xs" }, "0.0 \u20AA"))))),
+                            react_1.default.createElement("div", { className: "font-black text-xs" }, "0.0 شيكل"))))),
                     react_1.default.createElement("div", { className: "grid grid-cols-2 gap-2 py-3 text-xs" },
                         react_1.default.createElement("div", { className: "bg-slate-50 dark:bg-slate-700/40 p-2 rounded-xl" },
                             react_1.default.createElement("div", { className: "text-[10px] text-slate-400" }, "\u0627\u0644\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u062A\u0627\u0628\u0639\u0629 \u0644\u0647"),
@@ -10350,7 +10385,7 @@ const SubscribersView = () => {
                         react_1.default.createElement("button", { onClick: () => handleOpenSummaryMessage(sub), className: "flex items-center justify-center gap-1 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold transition-colors" },
                             react_1.default.createElement(lucide_react_1.MessageCircle, { className: "w-3 h-3 text-emerald-500" }),
                             react_1.default.createElement("span", null, "\u0648\u0627\u062A\u0633\u0627\u0628")),
-                        react_1.default.createElement("a", { href: (0, helpers_1.buildSmsUrl)(sub.phone, `مرحبا ${sub.name}، نود إعلامكم برصيد اشتراك الكهرباء: ${summary.amountDueBySubscriber > 0 ? `المتبقي عليكم ${summary.amountDueBySubscriber} ₪` : 'حسابكم مسدد'}`), className: "flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 text-slate-700 dark:text-slate-200 text-[11px] font-bold transition-colors" },
+                        react_1.default.createElement("a", { href: (0, helpers_1.buildSmsUrl)(sub.phone, `مرحبا ${sub.name}، نود إعلامكم برصيد اشتراك الكهرباء: ${summary.amountDueBySubscriber > 0 ? `المتبقي عليكم ${summary.amountDueBySubscriber} شيكل` : 'حسابكم مسدد'}`), className: "flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 text-slate-700 dark:text-slate-200 text-[11px] font-bold transition-colors" },
                             react_1.default.createElement(lucide_react_1.Send, { className: "w-3 h-3 text-amber-500" }),
                             react_1.default.createElement("span", null, "SMS"))),
                     react_1.default.createElement("div", { className: "flex items-center justify-between gap-1.5 pt-1" },
@@ -10419,10 +10454,10 @@ const SubscribersView = () => {
                                     react_1.default.createElement("div", { className: "text-[10px] text-amber-600 dark:text-amber-400" },
                                         "\u0645\u062A\u0648\u0633\u0637: ",
                                         summary.averagePricePerKw.toFixed(1),
-                                        " \u20AA / KW")),
+                                        " شيكل / KW")),
                                 react_1.default.createElement("div", { className: "p-3.5 rounded-xl bg-slate-900 text-white dark:bg-slate-950 border border-slate-800" },
                                     react_1.default.createElement("div", { className: "text-[10px] text-slate-300" }, "\u0635\u0627\u0641\u064A \u0627\u0644\u062D\u0633\u0627\u0628"),
-                                    react_1.default.createElement("div", { className: "text-base font-black text-amber-400 mt-0.5" }, summary.amountDueBySubscriber > 0 ? (`عليك ${(0, helpers_1.formatCurrency)(summary.amountDueBySubscriber)}`) : summary.amountDueToSubscriber > 0 ? (`لك ${(0, helpers_1.formatCurrency)(summary.amountDueToSubscriber)}`) : ('مسدد 0.0 ₪')),
+                                    react_1.default.createElement("div", { className: "text-base font-black text-amber-400 mt-0.5" }, summary.amountDueBySubscriber > 0 ? (`عليك ${(0, helpers_1.formatCurrency)(summary.amountDueBySubscriber)}`) : summary.amountDueToSubscriber > 0 ? (`لك ${(0, helpers_1.formatCurrency)(summary.amountDueToSubscriber)}`) : ('مسدد 0.0 شيكل')),
                                     react_1.default.createElement("div", { className: "text-[10px] text-slate-400" },
                                         "\u0645\u062F\u0641\u0648\u0639: ",
                                         (0, helpers_1.formatCurrency)(summary.totalPaid)))),
@@ -10469,7 +10504,7 @@ const SubscribersView = () => {
                                         "\u0633\u0639\u0631 \u0627\u0644\u0643\u064A\u0644\u0648: ",
                                         react_1.default.createElement("span", { className: "font-bold" },
                                             lastInvoice.pricePerKw,
-                                            " \u20AA")),
+                                            " شيكل")),
                                     react_1.default.createElement("div", null,
                                         "\u0642\u064A\u0645\u0629 \u0627\u0644\u0641\u0627\u062A\u0648\u0631\u0629: ",
                                         react_1.default.createElement("span", { className: "font-bold" }, (0, helpers_1.formatCurrency)(lastInvoice.totalCost))),
@@ -10506,7 +10541,7 @@ const SubscribersView = () => {
                                         inv.consumptionKw,
                                         " KW) \u2022 \u0633\u0639\u0631 ",
                                         inv.pricePerKw,
-                                        " \u20AA")),
+                                        " شيكل")),
                                 react_1.default.createElement("div", { className: "text-right" },
                                     react_1.default.createElement("div", { className: "font-black text-sm text-slate-900 dark:text-white" }, (0, helpers_1.formatCurrency)(inv.totalCost)),
                                     react_1.default.createElement("div", { className: `text-[10px] font-bold ${inv.remainingAmount > 0 ? 'text-amber-600' : 'text-emerald-600'}` }, inv.remainingAmount > 0 ? `متبقي ${(0, helpers_1.formatCurrency)(inv.remainingAmount)}` : 'مدفوعة بالكامل'))))))));
@@ -10516,8 +10551,9 @@ const SubscribersView = () => {
                         return (react_1.default.createElement("div", { className: "space-y-3" },
                             react_1.default.createElement("div", { className: "flex items-center justify-between" },
                                 react_1.default.createElement("span", { className: "text-xs font-bold text-slate-700 dark:text-slate-300" }, "\u0633\u062C\u0644 \u0627\u0644\u062F\u0641\u0639\u0627\u062A \u0648\u0627\u0644\u062A\u062D\u0648\u064A\u0644\u0627\u062A \u0627\u0644\u0645\u0627\u0644\u064A\u0629"),
-                                react_1.default.createElement("div", { className: "flex gap-2" },
+                                react_1.default.createElement("div", { className: "flex gap-2 flex-wrap" },
                                     react_1.default.createElement("button", { onClick: () => setQuickActionModal('add-deposit'), className: "px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-bold" }, "\u0627\u0633\u062A\u0642\u0628\u0627\u0644 \u062F\u0641\u0639\u0629"),
+                                    react_1.default.createElement("button", { onClick: () => setQuickActionModal('send-payment'), className: "px-2.5 py-1 rounded-lg bg-purple-600 text-white text-xs font-bold" }, "\u0625\u0631\u0633\u0627\u0644 \u062F\u0641\u0639\u0629"),
                                     react_1.default.createElement("button", { onClick: () => setTransferModalOpen(true), className: "px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-xs font-bold" }, "\u062A\u062D\u0648\u064A\u0644 \u0645\u0627\u0644\u064A"))),
                             subTxs.length === 0 ? (react_1.default.createElement("div", { className: "p-8 text-center text-xs text-slate-400" }, "\u0644\u0627 \u064A\u0648\u062C\u062F \u062D\u0631\u0643\u0627\u062A \u0645\u0627\u0644\u064A\u0629 \u0645\u0633\u062C\u0644\u0629 \u0628\u0639\u062F")) : (subTxs.map(tx => (react_1.default.createElement("div", { key: tx.id, className: "p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40 flex items-center justify-between" },
                                 react_1.default.createElement("div", null,
@@ -10525,10 +10561,10 @@ const SubscribersView = () => {
                                         react_1.default.createElement("span", null,
                                             tx.type === 'deposit' && 'استقبال دفعة مالية (إيداع)',
                                             tx.type === 'send' && 'إرسال دفعة مالية للمشترك',
-                                            tx.type === 'transfer' && 'تحويل بين حسابات المشتركين'),
+                                            tx.type === 'transfer' && (tx.targetSubscriberId === selectedSubscriberForDetail.id ? 'تحويل وارد من مشترك' : 'تحويل صادر إلى مشترك')),
                                         react_1.default.createElement("span", { className: "text-[10px] text-slate-400 font-normal" }, tx.date)),
                                     react_1.default.createElement("div", { className: "text-[11px] text-slate-500 mt-0.5" }, tx.notes)),
-                                react_1.default.createElement("div", { className: `font-black text-sm ${tx.type === 'deposit' ? 'text-emerald-600' : 'text-purple-600'}` }, (0, helpers_1.formatCurrency)(tx.amount))))))));
+                                react_1.default.createElement("div", { className: `font-black text-sm ${(tx.type === 'deposit' || (tx.type === 'transfer' && tx.targetSubscriberId === selectedSubscriberForDetail.id)) ? 'text-emerald-600' : 'text-rose-600'}` }, (tx.type === 'deposit' || (tx.type === 'transfer' && tx.targetSubscriberId === selectedSubscriberForDetail.id)) ? '+ ' : '- ', (0, helpers_1.formatCurrency)(tx.amount))))))));
                     })())))),
         addModalOpen && (react_1.default.createElement("div", { className: "fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in" },
             react_1.default.createElement("div", { className: "bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800" },
@@ -10635,7 +10671,7 @@ const SubscribersView = () => {
                                 s.phone,
                                 ")"))))),
                     react_1.default.createElement("div", null,
-                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0645\u062D\u0648\u0644 (\u20AA) *"),
+                        react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0645\u062D\u0648\u0644 (شيكل) *"),
                         react_1.default.createElement("input", { type: "number", step: "any", required: true, placeholder: "0.00", value: transferAmount, onChange: e => setTransferAmount(e.target.value), className: "w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-sm" })),
                     react_1.default.createElement("div", null,
                         react_1.default.createElement("label", { className: "block font-bold text-slate-700 dark:text-slate-300 mb-1" }, "\u0633\u0628\u0628 \u0627\u0644\u062A\u062D\u0648\u064A\u0644 \u0623\u0648 \u0645\u0644\u0627\u062D\u0638\u0627\u062A"),
@@ -11351,6 +11387,30 @@ const AppProvider = ({ children }) => {
     (0, react_1.useEffect)(() => {
         if (activeEmployeeId) localStorage.setItem('ahm_active_employee', activeEmployeeId);
     }, [activeEmployeeId]);
+    (0, react_1.useEffect)(() => {
+        const applyRemote = (e) => {
+            const full = e?.detail?.snapshot;
+            if (!full || typeof full !== 'object') return;
+            window.__MASIL_BOOTING_FIRST_PAGE = false;
+            if (full.settings) setSettings((p) => ({ ...p, ...full.settings }));
+            if (full.zones) setZones(full.zones);
+            if (full.panels) setPanels(full.panels);
+            if (full.subscribers) setSubscribers(full.subscribers);
+            if (full.meters) setMeters(full.meters);
+            if (full.invoices) setInvoices(full.invoices);
+            if (full.financialAccounts) setFinancialAccounts(full.financialAccounts);
+            if (full.expenseTypes) setExpenseTypes(full.expenseTypes);
+            if (full.transactions) setTransactions(full.transactions);
+            if (full.employees) setEmployees(full.employees);
+            if (full.tasks) setTasks(full.tasks);
+            if (full.timeline) setTimeline(full.timeline);
+            if (full.supportMessages) setSupportMessages(full.supportMessages);
+            if (full.generators) setGenerators(full.generators);
+            if (full.timeLogs) setTimeLogs(full.timeLogs);
+        };
+        window.addEventListener('masil-remote-snapshot', applyRemote);
+        return () => window.removeEventListener('masil-remote-snapshot', applyRemote);
+    }, []);
     // Lazy hydration: boot with first 50 rows; hydrate full local IndexedDB data when a section needs it.
     (0, react_1.useEffect)(() => {
         if (hydratedTabsRef.current.has(activeTab)) return;
@@ -11699,7 +11759,7 @@ const AppProvider = ({ children }) => {
             setFinancialAccounts(prev => prev.map(acc => acc.id === paymentAccountId ? { ...acc, currentBalance: Number(acc.currentBalance||0)+amountPaid } : acc));
         }
         const op = getOperator();
-        addTimelineEntry({ action:'create', entityType:'invoice', title:'إصدار فاتورة جديدة', details:`تم إصدار الفاتورة ${newInv.invoiceNumber} بقيمة ${newInv.totalCost} ₪ واستهلاك ${newInv.consumptionKw} KW`, operatorId:op.id, operatorName:op.name, operatorRole:op.role, metadata:{invoiceId:newInv.id} });
+        addTimelineEntry({ action:'create', entityType:'invoice', title:'إصدار فاتورة جديدة', details:`تم إصدار الفاتورة ${newInv.invoiceNumber} بقيمة ${newInv.totalCost} شيكل واستهلاك ${newInv.consumptionKw} KW`, operatorId:op.id, operatorName:op.name, operatorRole:op.role, metadata:{invoiceId:newInv.id} });
         return newInv;
     };
     const updateInvoice = (id, updates) => {
@@ -11750,7 +11810,7 @@ const AppProvider = ({ children }) => {
             action: 'create',
             entityType: 'account',
             title: 'إضافة حساب مالي',
-            details: `تم فتح حساب جديد: ${newAcc.name} برصيد افتتاحي ${newAcc.openingBalance} ₪`,
+            details: `تم فتح حساب جديد: ${newAcc.name} برصيد افتتاحي ${newAcc.openingBalance} شيكل`,
             operatorId: op.id,
             operatorName: op.name,
             operatorRole: op.role
@@ -11804,6 +11864,10 @@ const AppProvider = ({ children }) => {
         const accountId = txData.accountId || txData.financialAccountId || '';
         const account = financialAccounts.find(a => a.id === accountId);
         const isSubscriberTransfer = txData.type === 'transfer' && !!txData.targetSubscriberId;
+        const sourceSubscriber = txData.subscriberId ? subscribers.find(s => s.id === txData.subscriberId) : null;
+        const targetSubscriber = isSubscriberTransfer ? subscribers.find(s => s.id === txData.targetSubscriberId) : null;
+        if ((txData.type === 'deposit' || txData.type === 'send') && !sourceSubscriber) { window.asilToast?.('اختر المشترك لهذه الحركة.','error'); return null; }
+        if (isSubscriberTransfer && (!sourceSubscriber || !targetSubscriber || sourceSubscriber.id === targetSubscriber.id)) { window.asilToast?.('اختر مشتركاً آخر صحيحاً للتحويل.','error'); return null; }
         if (!isSubscriberTransfer && ['deposit','send','expense','transfer'].includes(txData.type) && !account) { window.asilToast?.('اختيار الحساب المالي إلزامي لهذه الحركة.','error'); return null; }
         let targetAccount = null;
         if (txData.type === 'transfer' && !isSubscriberTransfer) {
@@ -11811,51 +11875,73 @@ const AppProvider = ({ children }) => {
             if (!targetAccount || targetAccount.id === accountId) { window.asilToast?.('اختر حساب تحويل مختلفاً وصحيحاً.','error'); return null; }
         }
         if ((txData.type === 'send' || txData.type === 'expense' || (txData.type === 'transfer' && !isSubscriberTransfer)) && account && Number(account.currentBalance||0) < amount) { window.asilToast?.(`الرصيد غير كافٍ في الحساب: ${account.name}`,'error'); return null; }
-        const newTx = { ...txData, accountId: accountId || txData.accountId, amount, id:'tx-'+Date.now(), createdAt:new Date().toISOString().slice(0,10) };
+        let allocations = [];
+        if (txData.type === 'deposit' && sourceSubscriber) {
+            let remaining = amount;
+            const outstanding = invoices.filter(inv => inv.subscriberId === sourceSubscriber.id && Number(inv.remainingAmount ?? (Number(inv.totalCost||0)-Number(inv.amountPaid||0))) > 0.0001)
+                .slice().sort((a,b)=>new Date(a.currentReadingDate||a.date||a.createdAt||0)-new Date(b.currentReadingDate||b.date||b.createdAt||0));
+            for (const inv of outstanding) {
+                if (remaining <= 0.0001) break;
+                const due = Math.max(0, Number(inv.remainingAmount ?? (Number(inv.totalCost||0)-Number(inv.amountPaid||0))) || 0);
+                const applied = Math.min(due, remaining);
+                if (applied > 0) { allocations.push({invoiceId:inv.id,amount:applied}); remaining -= applied; }
+            }
+        }
+        const newTx = { ...txData, accountId: accountId || txData.accountId, amount, allocations, id:'tx-'+Date.now()+'-'+Math.random().toString(36).slice(2,7), createdAt:new Date().toISOString() };
         setTransactions(prev => [newTx, ...prev]);
+        if (allocations.length) {
+            const byId = Object.fromEntries(allocations.map(a=>[a.invoiceId,Number(a.amount||0)]));
+            setInvoices(prev => prev.map(inv => {
+                const applied = byId[inv.id] || 0;
+                if (!applied) return inv;
+                const nextPaid = Math.min(Number(inv.totalCost||0), Number(inv.amountPaid||0) + applied);
+                const nextRemaining = Math.max(0, Number(inv.totalCost||0) - nextPaid);
+                return {...inv, amountPaid:nextPaid, remainingAmount:nextRemaining, status:nextRemaining<=0.0001?'paid':'partial'};
+            }));
+        }
         if (newTx.type === 'deposit' && accountId) setFinancialAccounts(prev => prev.map(acc => acc.id===accountId ? {...acc,currentBalance:Number(acc.currentBalance||0)+amount}:acc));
         else if ((newTx.type === 'send' || newTx.type === 'expense') && accountId) setFinancialAccounts(prev => prev.map(acc => acc.id===accountId ? {...acc,currentBalance:Number(acc.currentBalance||0)-amount}:acc));
         else if (newTx.type === 'transfer' && !isSubscriberTransfer && accountId && newTx.toAccountId) setFinancialAccounts(prev => prev.map(acc => acc.id===accountId ? {...acc,currentBalance:Number(acc.currentBalance||0)-amount} : acc.id===newTx.toAccountId ? {...acc,currentBalance:Number(acc.currentBalance||0)+amount}:acc));
         const op = getOperator();
         const typeNames={deposit:'استقبال دفعة مالية',send:'إرسال دفعة مالية',transfer:isSubscriberTransfer?'تحويل بين المشتركين':'تحويل أموال بين الحسابات',expense:'تسجيل مصروف'};
-        addTimelineEntry({action:'create',entityType:'transaction',title:typeNames[newTx.type]||'حركة مالية',details:`حركة بمبلغ ${amount} ₪ - ${newTx.notes||''}`,operatorId:op.id,operatorName:op.name,operatorRole:op.role,metadata:{txId:newTx.id}});
+        const subscriberText=isSubscriberTransfer?` من ${sourceSubscriber?.name||''} إلى ${targetSubscriber?.name||''}`:(sourceSubscriber?` - ${sourceSubscriber.name}`:'');
+        addTimelineEntry({action:'create',entityType:'transaction',title:typeNames[newTx.type]||'حركة مالية',details:`حركة بمبلغ ${amount} شيكل${subscriberText} - ${newTx.notes||''}`,operatorId:op.id,operatorName:op.name,operatorRole:op.role,metadata:{txId:newTx.id,subscriberId:newTx.subscriberId||'',targetSubscriberId:newTx.targetSubscriberId||'',accountId:newTx.accountId||'',toAccountId:newTx.toAccountId||'',allocations}});
+        setTimeout(() => { window.MoldRuntime?.forceSync?.().catch(()=>{}); }, 180);
         return newTx;
     };
     const deleteTransaction = (id) => {
         const tx = transactions.find(item => item.id === id);
-        if (!tx)
-            return false;
+        if (!tx) return false;
         if (tx.invoiceId) {
             window.asilToast?.('هذه الحركة مرتبطة بدفعة فاتورة. احذف الفاتورة أو عدّلها حتى تبقى الحسابات متطابقة.','error');
             return false;
         }
-        // Rollback financial accounts balances
+        if (tx.type === 'deposit' && Array.isArray(tx.allocations) && tx.allocations.length) {
+            const byId = Object.fromEntries(tx.allocations.map(a=>[a.invoiceId,Number(a.amount||0)]));
+            setInvoices(prev => prev.map(inv => {
+                const applied=byId[inv.id]||0;if(!applied)return inv;
+                const nextPaid=Math.max(0,Number(inv.amountPaid||0)-applied);
+                const nextRemaining=Math.max(0,Number(inv.totalCost||0)-nextPaid);
+                return {...inv,amountPaid:nextPaid,remainingAmount:nextRemaining,status:nextRemaining<=0.0001?'paid':nextPaid>0?'partial':'unpaid'};
+            }));
+        }
         if (tx.type === 'deposit' && tx.accountId) {
-            setFinancialAccounts(prev => prev.map(acc => acc.id === tx.accountId ? { ...acc, currentBalance: acc.currentBalance - tx.amount } : acc));
+            setFinancialAccounts(prev => prev.map(acc => acc.id === tx.accountId ? { ...acc, currentBalance: Number(acc.currentBalance||0) - Number(tx.amount||0) } : acc));
         }
         else if ((tx.type === 'send' || tx.type === 'expense') && tx.accountId) {
-            setFinancialAccounts(prev => prev.map(acc => acc.id === tx.accountId ? { ...acc, currentBalance: acc.currentBalance + tx.amount } : acc));
+            setFinancialAccounts(prev => prev.map(acc => acc.id === tx.accountId ? { ...acc, currentBalance: Number(acc.currentBalance||0) + Number(tx.amount||0) } : acc));
         }
         else if (tx.type === 'transfer' && tx.accountId && tx.toAccountId) {
             setFinancialAccounts(prev => prev.map(acc => {
-                if (acc.id === tx.accountId)
-                    return { ...acc, currentBalance: acc.currentBalance + tx.amount };
-                if (acc.id === tx.toAccountId)
-                    return { ...acc, currentBalance: acc.currentBalance - tx.amount };
+                if (acc.id === tx.accountId) return { ...acc, currentBalance: Number(acc.currentBalance||0) + Number(tx.amount||0) };
+                if (acc.id === tx.toAccountId) return { ...acc, currentBalance: Number(acc.currentBalance||0) - Number(tx.amount||0) };
                 return acc;
             }));
         }
         setTransactions(prev => prev.filter(t => t.id !== id));
+        setTimeout(() => { window.MoldRuntime?.forceSync?.().catch(()=>{}); }, 180);
         const op = getOperator();
-        addTimelineEntry({
-            action: 'delete',
-            entityType: 'transaction',
-            title: 'إلغاء حركة مالية',
-            details: `تم حذف الحركة المالية بقيمة ${tx.amount} ₪`,
-            operatorId: op.id,
-            operatorName: op.name,
-            operatorRole: op.role
-        });
+        addTimelineEntry({ action:'delete', entityType:'transaction', title:'إلغاء حركة مالية', details:`تم حذف الحركة المالية بقيمة ${tx.amount} شيكل`, operatorId:op.id, operatorName:op.name, operatorRole:op.role });
         return true;
     };
     // Employees
@@ -11979,11 +12065,6 @@ const AppProvider = ({ children }) => {
         const actualAdded = Math.min(requested,room);
         if (actualAdded <= 0) { window.asilToast?.('خزان الوقود ممتلئ.','error'); return false; }
         const totalCost = Math.max(0,Number(costPerLiter)||0)*actualAdded;
-        if (totalCost > 0) {
-            const acc = financialAccounts.find(a=>a.id===accountId);
-            if (!acc) { window.asilToast?.('اختر الحساب الذي سيتم دفع تكلفة الوقود منه.','error'); return false; }
-            if (Number(acc.currentBalance||0) < totalCost) { window.asilToast?.('رصيد الحساب المحدد لا يكفي لتكلفة الوقود.','error'); return false; }
-        }
         let nextFuel=Number(current.currentFuelLiters||0);
         setGenerators(prev => {
             const next = prev.map(g => { if (g.id!==generatorId) return g; nextFuel=Math.min(Number(g.fuelCapacityLiters||0),Number(g.currentFuelLiters||0)+actualAdded); return {...g,currentFuelLiters:nextFuel}; });
@@ -11991,12 +12072,7 @@ const AppProvider = ({ children }) => {
             return next;
         });
         const op=getOperator();
-        if (totalCost > 0) {
-            const fuelExpenseType=expenseTypes.find(t=>/وقود|سولار|ديزل/i.test(t.name))||expenseTypes[0];
-            const tx=addTransaction({type:'expense',accountId,amount:totalCost,date:new Date().toISOString().slice(0,10),expenseTypeId:fuelExpenseType?.id,notes:notes?.trim()||`تعبئة ${actualAdded.toFixed(1)} لتر وقود للمولد ${current.name}`,operatorName:op.name,operatorRole:op.role});
-            if (!tx) return false;
-        }
-        addTimelineEntry({action:'update',entityType:'settings',title:'إضافة وقود للمولد',details:`تمت إضافة ${actualAdded.toFixed(1)} لتر إلى ${current.name}. الرصيد الجديد ${nextFuel.toFixed(1)} لتر`,operatorId:op.id,operatorName:op.name,operatorRole:op.role,metadata:{generatorId,liters:actualAdded,totalCost}});
+        addTimelineEntry({action:'update',entityType:'settings',title:'إضافة وقود للمولد',details:`تمت إضافة ${actualAdded.toFixed(1)} لتر إلى ${current.name}. الرصيد الجديد ${nextFuel.toFixed(1)} لتر${totalCost>0?`، بتكلفة ${totalCost.toFixed(2)} شيكل`:''}`,operatorId:op.id,operatorName:op.name,operatorRole:op.role,metadata:{generatorId,liters:actualAdded,totalCost,notes:notes?.trim()||''}});
         window.asilToast?.(`تمت إضافة ${actualAdded.toFixed(1)} لتر وقود بنجاح`,'success');
         return true;
     };
@@ -12313,7 +12389,7 @@ exports.initialSettings = {
     activationCode: 'AHM-GEN-2026-X88',
     defaultPricePerKw: 40.0,
     defaultDiscount: 0,
-    currency: '₪',
+    currency: 'شيكل',
     theme: 'teal',
     scheduleDark: false,
     darkScheduleStart: '20:00',
@@ -12345,11 +12421,11 @@ exports.initialSettings = {
 تاريخ آخر قراءة: {تاريخ_الاخيرة}
 القراءة الأخيرة: {القراءة_الاخيرة} KW
 الاستهلاك الكلي: {الاستهلاك_الكلي} KW
-متوسط سعر الكيلو: {متوسط_سعر_الكيلو} ₪
-إجمالي تكلفة الاستهلاك: {تكلفة_الاستهلاك} ₪
-إجمالي المبلغ المدفوع: {المبلغ_المدفوع} ₪
-إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} ₪
-إجمالي المبلغ المتبقي لك: {المتبقي_لك} ₪`,
+متوسط سعر الكيلو: {متوسط_سعر_الكيلو} شيكل
+إجمالي تكلفة الاستهلاك: {تكلفة_الاستهلاك} شيكل
+إجمالي المبلغ المدفوع: {المبلغ_المدفوع} شيكل
+إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} شيكل
+إجمالي المبلغ المتبقي لك: {المتبقي_لك} شيكل`,
         invoiceTemplate: `مرحبا {اسم_المشترك}
 {اسم_الشبكة}
 {اسم_المرسل}
@@ -12360,68 +12436,68 @@ exports.initialSettings = {
 القراءة الحالية: {القراءة_الحالية} KW
 تاريخ القراءة الحالية: {تاريخ_القراءة_الحالية}
 إجمالي استهلاك الفاتورة: {استهلاك_الفاتورة} كيلو
-سعر الكيلو: {سعر_الكيلو} ₪
-المبلغ المخصوم: {الخصم} ₪
-إجمالي تكلفة استهلاك الفاتورة: {تكلفة_الفاتورة} ₪
+سعر الكيلو: {سعر_الكيلو} شيكل
+المبلغ المخصوم: {الخصم} شيكل
+إجمالي تكلفة استهلاك الفاتورة: {تكلفة_الفاتورة} شيكل
 ---
 الملخص الإجمالي:
 القراءة الافتتاحية: {الافتتاحية} KW ({تاريخ_الافتتاحية})
 القراءة الأخيرة: {القراءة_الاخيرة} KW ({تاريخ_الاخيرة})
 إجمالي الاستهلاك: {الاستهلاك_الكلي} KW
-إجمالي تكلفة الاستهلاك: {تكلفة_الاستهلاك} ₪
-إجمالي المبلغ المدفوع: {المبلغ_المدفوع} ₪
-المبلغ المتبقي لك: {المتبقي_لك} ₪
-المبلغ المتبقي عليك: {المتبقي_عليك} ₪`,
+إجمالي تكلفة الاستهلاك: {تكلفة_الاستهلاك} شيكل
+إجمالي المبلغ المدفوع: {المبلغ_المدفوع} شيكل
+المبلغ المتبقي لك: {المتبقي_لك} شيكل
+المبلغ المتبقي عليك: {المتبقي_عليك} شيكل`,
         depositTemplate: `مرحبا {اسم_المشترك}
 {اليوم} - {التاريخ}
 {اسم_الشبكة}
 مرسل الإشعار: {اسم_المرسل}
 نود إعلامكم أنه تم استلام دفعة من طرفكم
 يوم الدفع: {اليوم} | التاريخ: {التاريخ}
-المبلغ المستلم: {المبلغ} ₪
+المبلغ المستلم: {المبلغ} شيكل
 وأودعت هذه الدفعة في حساب: {اسم_الحساب}
 ---
 الملخص الإجمالي لاشتراك الكهرباء:
 إجمالي الاستهلاك: {الاستهلاك_الكلي} KW
-إجمالي ثمن الفواتير: {تكلفة_الاستهلاك} ₪
-إجمالي المبلغ المدفوع: {المبلغ_المدفوع} ₪
-إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} ₪
-إجمالي المبلغ المتبقي لك: {المتبقي_لك} ₪`,
+إجمالي ثمن الفواتير: {تكلفة_الاستهلاك} شيكل
+إجمالي المبلغ المدفوع: {المبلغ_المدفوع} شيكل
+إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} شيكل
+إجمالي المبلغ المتبقي لك: {المتبقي_لك} شيكل`,
         sendPaymentTemplate: `مرحبا {اسم_المشترك}
 {اليوم} - {التاريخ}
 {اسم_الشبكة}
 مرسل الإشعار: {اسم_المرسل}
 نود إعلامكم أنه تم إرسال دفعة مالية لحسابكم
 يوم العملية: {اليوم} | التاريخ: {التاريخ}
-المبلغ: {المبلغ} ₪
+المبلغ: {المبلغ} شيكل
 وأرسلت من حساب: {اسم_الحساب}
 ---
 الملخص الإجمالي لاشتراك الكهرباء:
-إجمالي المبلغ المدفوع: {المبلغ_المدفوع} ₪
-إجمالي المبلغ المتبقي لك: {المتبقي_لك} ₪
-إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} ₪`,
+إجمالي المبلغ المدفوع: {المبلغ_المدفوع} شيكل
+إجمالي المبلغ المتبقي لك: {المتبقي_لك} شيكل
+إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} شيكل`,
         transferSenderTemplate: `مرحبا {اسم_المشترك}
 {اليوم} - {التاريخ}
 {اسم_الشبكة}
 مرسل الإشعار: {اسم_المرسل}
 نود إعلامكم أنه تم تحويل مبلغ مالي من حسابكم ({حساب_المحول_منه})
 إلى حساب المشترك: {حساب_المحول_اليه}
-المبلغ المحول: {المبلغ} ₪
+المبلغ المحول: {المبلغ} شيكل
 ---
 الملخص الإجمالي:
-إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} ₪
-إجمالي المبلغ المتبقي لك: {المتبقي_لك} ₪`,
+إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} شيكل
+إجمالي المبلغ المتبقي لك: {المتبقي_لك} شيكل`,
         transferReceiverTemplate: `مرحبا {اسم_المشترك}
 {اليوم} - {التاريخ}
 {اسم_الشبكة}
 مرسل الإشعار: {اسم_المرسل}
 نود إعلامكم أنه تم استلام تحويل مالي لحسابكم
 من المشترك: {حساب_المحول_منه}
-المبلغ المحول: {المبلغ} ₪
+المبلغ المحول: {المبلغ} شيكل
 ---
 الملخص الإجمالي:
-إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} ₪
-إجمالي المبلغ المتبقي لك: {المتبقي_لك} ₪`,
+إجمالي المبلغ المتبقي عليك: {المتبقي_عليك} شيكل
+إجمالي المبلغ المتبقي لك: {المتبقي_لك} شيكل`,
         customInquiryTemplate: `مرحبا {اسم_المشترك} الكرام،
 تحية طيبة من إدارة {اسم_الشبكة}.
 يرجى العلم بأنه تم تحديث ساعات تشغيل المولد الكهربائي للأيام القادمة.
@@ -12923,7 +12999,7 @@ exports.initialTimelineActivities = [
         action: 'create',
         entityType: 'invoice',
         title: 'إصدار فاتورة كهرباء',
-        details: 'فاتورة INV-2026-002 بقيمة 1850 ₪ لعداد MTR-1001 باستهلاك 47.5 KW',
+        details: 'فاتورة INV-2026-002 بقيمة 1850 شيكل لعداد MTR-1001 باستهلاك 47.5 KW',
         operatorId: 'emp-1',
         operatorName: 'م. أحمد الأحمدي',
         operatorRole: 'مدير الشبكة',
@@ -12935,7 +13011,7 @@ exports.initialTimelineActivities = [
         action: 'create',
         entityType: 'transaction',
         title: 'استقبال دفعة مالية',
-        details: 'استلام دفعة نقدية بقيمة 13500 ₪ من شركة البركة وإيداعها في بنك فلسطين',
+        details: 'استلام دفعة نقدية بقيمة 13500 شيكل من شركة البركة وإيداعها في بنك فلسطين',
         operatorId: 'emp-2',
         operatorName: 'سامر قاسم',
         operatorRole: 'محاسب مالي',
@@ -12947,7 +13023,7 @@ exports.initialTimelineActivities = [
         action: 'create',
         entityType: 'transaction',
         title: 'صرف مصروف ديزل',
-        details: 'صرف 7200 ₪ لشراء سولار ديزل للمولد الرئيسي',
+        details: 'صرف 7200 شيكل لشراء سولار ديزل للمولد الرئيسي',
         operatorId: 'emp-1',
         operatorName: 'م. أحمد الأحمدي',
         operatorRole: 'مدير الشبكة',
@@ -12977,7 +13053,7 @@ exports.initialSupportMessages = [
         id: 'msg-3',
         senderRole: 'admin',
         senderName: 'م. أحمد الأحمدي',
-        text: 'وعليكم السلام أخي محمود، تم التأكيد والرصيد المتبقي تم تحديثه في بطاقتكم إلى 850 ₪.',
+        text: 'وعليكم السلام أخي محمود، تم التأكيد والرصيد المتبقي تم تحديثه في بطاقتكم إلى 850 شيكل.',
         timestamp: '2026-09-08 17:45',
         channel: 'subscriber',
         subscriberId: 'sub-1'
@@ -13194,11 +13270,11 @@ exports.buildSmsUrl = buildSmsUrl;
 exports.triggerPrint = triggerPrint;
 function formatCurrency(amount) {
     if (amount === undefined || amount === null || amount === '') {
-        return '0.0 ₪';
+        return '0.0 شيكل';
     }
     const numeric = typeof amount === 'number' ? amount : Number(amount);
     const safeNum = isNaN(numeric) ? 0 : numeric;
-    return `${safeNum.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 2 })} ₪`;
+    return `${safeNum.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 2 })} شيكل`;
 }
 function formatKw(kw) {
     if (kw === undefined || kw === null || kw === '') {
@@ -13230,27 +13306,38 @@ function getTodayDateString() {
 function computeSubscriberSummary(subscriberId, allMeters = [], allInvoices = [], allTransactions = []) {
     const subscriberMeters = (allMeters || []).filter(m => m && m.subscriberId === subscriberId);
     const subscriberInvoices = (allInvoices || []).filter(i => i && i.subscriberId === subscriberId);
-    const subscriberTransactions = (allTransactions || []).filter(t => t && t.subscriberId === subscriberId);
+    const subscriberTransactions = (allTransactions || []).filter(t => t && (t.subscriberId === subscriberId || t.targetSubscriberId === subscriberId));
     let totalInvoiced = 0;
     let totalConsumptionKw = 0;
     subscriberInvoices.forEach(inv => {
         totalInvoiced += (inv.totalCost || 0);
         totalConsumptionKw += (inv.consumptionKw || 0);
     });
-    // Calculate total payments made by subscriber (deposits)
+    // Subscriber ledger rules:
+    // incoming payment (deposit) credits subscriber, outgoing payment (send) debits subscriber.
+    // subscriber-to-subscriber transfer debits the sender and credits the receiver.
     let totalDeposits = 0;
     let totalRefundsOrSent = 0;
+    let incomingTransfers = 0;
+    let outgoingTransfers = 0;
     subscriberTransactions.forEach(t => {
-        if (t.type === 'deposit') {
-            totalDeposits += (t.amount || 0);
-        }
-        else if (t.type === 'send') {
-            totalRefundsOrSent += (t.amount || 0);
+        const amount = Number(t.amount || 0);
+        if (t.type === 'deposit' && t.subscriberId === subscriberId) totalDeposits += amount;
+        else if (t.type === 'send' && t.subscriberId === subscriberId) totalRefundsOrSent += amount;
+        else if (t.type === 'transfer' && t.targetSubscriberId) {
+            if (t.subscriberId === subscriberId) outgoingTransfers += amount;
+            if (t.targetSubscriberId === subscriberId) incomingTransfers += amount;
         }
     });
-    // Also count invoice direct payments if not in transactions
-    const invoicePaidDirectly = subscriberInvoices.reduce((acc, inv) => acc + (inv.amountPaid || 0), 0);
-    const totalPaid = Math.max(totalDeposits, invoicePaidDirectly) - totalRefundsOrSent;
+    // Direct invoice payments and allocated deposits are tracked without double counting legacy invoice balances.
+    const invoicePaidDirectly = subscriberInvoices.reduce((acc, inv) => acc + Number(inv.amountPaid || 0), 0);
+    const trackedAppliedToInvoices = subscriberTransactions.filter(t => t.type === 'deposit').reduce((sum,t) => {
+        if (t.invoiceId) return sum + Number(t.amount||0);
+        if (Array.isArray(t.allocations)) return sum + t.allocations.reduce((s,a)=>s+Number(a.amount||0),0);
+        return sum;
+    },0);
+    const legacyDirectPaid = Math.max(0, invoicePaidDirectly - trackedAppliedToInvoices);
+    const totalPaid = totalDeposits + legacyDirectPaid - totalRefundsOrSent - outgoingTransfers + incomingTransfers;
     const netBalance = totalInvoiced - totalPaid;
     const amountDueBySubscriber = netBalance > 0 ? netBalance : 0;
     const amountDueToSubscriber = netBalance < 0 ? Math.abs(netBalance) : 0;
@@ -13273,6 +13360,10 @@ function computeSubscriberSummary(subscriberId, allMeters = [], allInvoices = []
     return {
         totalInvoiced,
         totalPaid,
+        totalDeposits,
+        totalRefundsOrSent,
+        incomingTransfers,
+        outgoingTransfers,
         netBalance,
         amountDueBySubscriber,
         amountDueToSubscriber,
